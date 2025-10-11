@@ -1,5 +1,18 @@
 <script setup lang="ts">
-import { RouterLink } from "vue-router";
+import { computed } from "vue";
+import { useRouter, RouterLink } from "vue-router";
+import useAuth from "../stores/authStore";
+
+const router = useRouter();
+const { isAuthenticated, displayName, signOut } = useAuth();
+
+const showAuthButtons = computed(() => !isAuthenticated.value);
+const welcomeLabel = computed(() => displayName.value || "");
+
+const handleSignOut = async () => {
+  await signOut();
+  router.push("/");
+};
 </script>
 
 <template>
@@ -16,17 +29,43 @@ import { RouterLink } from "vue-router";
         </div>
         <nav class="flex items-center gap-4">
           <RouterLink
-            to="/signin"
+            to="/calendar"
             class="text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
-            Sign In
+            Calendar
           </RouterLink>
-          <RouterLink
-            to="/signup"
-            class="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium"
-          >
-            Get Started
-          </RouterLink>
+          <template v-if="showAuthButtons">
+            <RouterLink
+              to="/signin"
+              class="text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Sign In
+            </RouterLink>
+            <RouterLink
+              to="/signup"
+              class="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium"
+            >
+              Get Started
+            </RouterLink>
+          </template>
+          <template v-else>
+            <span class="hidden sm:inline text-sm text-muted-foreground">
+              Hi, <span class="text-foreground font-medium">{{ welcomeLabel }}</span>
+            </span>
+            <RouterLink
+              to="/dashboard"
+              class="text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Dashboard
+            </RouterLink>
+            <button
+              type="button"
+              @click="handleSignOut"
+              class="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors text-sm font-medium"
+            >
+              Sign Out
+            </button>
+          </template>
         </nav>
       </div>
     </header>
@@ -42,10 +81,18 @@ import { RouterLink } from "vue-router";
         </p>
         <div class="flex flex-col sm:flex-row gap-4 justify-center pt-4">
           <RouterLink
+            v-if="showAuthButtons"
             to="/signup"
             class="px-8 py-4 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-lg font-medium"
           >
             Start Planning
+          </RouterLink>
+          <RouterLink
+            v-else
+            to="/dashboard"
+            class="px-8 py-4 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-lg font-medium"
+          >
+            Go to Dashboard
           </RouterLink>
           <a
             href="#learn-more"

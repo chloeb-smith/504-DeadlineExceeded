@@ -1,23 +1,29 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { useRouter, RouterLink } from "vue-router";
-import { registerUser, usingMockAuth } from "../lib/auth";
+import { useRouter, useRoute, RouterLink } from "vue-router";
+import useAuth from "../stores/authStore";
 
 const router = useRouter();
+const route = useRoute();
+const { signUp, usingMockAuth: isMockAuth } = useAuth();
+
 const name = ref("");
 const email = ref("");
 const password = ref("");
 const error = ref("");
 const loading = ref(false);
-const isMockAuth = usingMockAuth;
 
 const handleSignUp = async () => {
   error.value = "";
   loading.value = true;
 
   try {
-    await registerUser(name.value, email.value, password.value);
-    router.push("/dashboard");
+    await signUp(name.value, email.value, password.value);
+    const redirectTo =
+      typeof route.query.redirect === "string" && route.query.redirect
+        ? route.query.redirect
+        : "/dashboard";
+    router.push(redirectTo);
   } catch (err) {
     error.value =
       err instanceof Error ? err.message : "Failed to create account. Please try again.";

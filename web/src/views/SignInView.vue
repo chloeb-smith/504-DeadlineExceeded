@@ -1,22 +1,28 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { useRouter, RouterLink } from "vue-router";
-import { loginUser, usingMockAuth } from "../lib/auth";
+import { useRouter, useRoute, RouterLink } from "vue-router";
+import useAuth from "../stores/authStore";
 
 const router = useRouter();
+const route = useRoute();
+const { signIn, usingMockAuth: isMockAuth } = useAuth();
+
 const email = ref("");
 const password = ref("");
 const error = ref("");
 const loading = ref(false);
-const isMockAuth = usingMockAuth;
 
 const handleSignIn = async () => {
   error.value = "";
   loading.value = true;
 
   try {
-    await loginUser(email.value, password.value);
-    router.push("/dashboard");
+    await signIn(email.value, password.value);
+    const redirectTo =
+      typeof route.query.redirect === "string" && route.query.redirect
+        ? route.query.redirect
+        : "/dashboard";
+    router.push(redirectTo);
   } catch (err) {
     error.value =
       err instanceof Error

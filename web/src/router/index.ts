@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
+import useAuth from "../stores/authStore";
 
 const router = createRouter({
   history: createWebHistory(),
@@ -21,9 +22,36 @@ const router = createRouter({
     {
       path: "/dashboard",
       name: "dashboard",
-      component: () => import("../views/DashboardView.vue")
+      component: () => import("../views/DashboardView.vue"),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: "/calendar",
+      name: "calendar",
+      component: () => import("../views/CalendarView.vue")
     }
   ]
+});
+
+router.beforeEach((to, from, next) => {
+  const auth = useAuth();
+  const requiresAuth = to.matched.some((record) => record.meta?.requiresAuth);
+  const isAuthenticated = auth.isAuthenticated.value;
+
+  if (requiresAuth && !isAuthenticated) {
+    next({
+      name: "signin",
+      query: { redirect: to.fullPath }
+    });
+    return;
+  }
+
+  if (isAuthenticated && (to.name === "signin" || to.name === "signup")) {
+    next({ name: "dashboard" });
+    return;
+  }
+
+  next();
 });
 
 export default router;
