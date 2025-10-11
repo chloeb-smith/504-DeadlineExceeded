@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -57,6 +57,108 @@ def _get_upcoming_window_days() -> int:
         return 60
 
 
+def _get_term_grace_period_days() -> int:
+    raw = os.getenv("CANVAS_TERM_GRACE_DAYS")
+    if not raw:
+        return 14
+    try:
+        value = int(raw)
+        return value if value >= 0 else 14
+    except ValueError:
+        return 14
+
+
+def _get_max_course_age_days() -> int:
+    raw = os.getenv("CANVAS_MAX_COURSE_AGE_DAYS")
+    if not raw:
+        return 150
+    try:
+        value = int(raw)
+        return value if value > 0 else 150
+    except ValueError:
+        return 150
+
+
+def _get_assignment_window_days() -> Tuple[int, int]:
+    raw_lookahead = os.getenv("CANVAS_ASSIGNMENT_LOOKAHEAD_DAYS")
+    raw_lookback = os.getenv("CANVAS_ASSIGNMENT_LOOKBACK_DAYS")
+    try:
+        lookahead = int(raw_lookahead) if raw_lookahead else 90
+    except ValueError:
+        lookahead = 90
+    try:
+        lookback = int(raw_lookback) if raw_lookback else 30
+    except ValueError:
+        lookback = 30
+    if lookahead <= 0:
+        lookahead = 90
+    if lookback < 0:
+        lookback = 0
+    return lookback, lookahead
+
+
+def _course_term_dates(course: Dict[str, Any]) -> Tuple[Optional[datetime], Optional[datetime]]:
+    term = course.get("term") or {}
+    start = (
+        _parse_canvas_datetime(term.get("start_at"))
+        or _parse_canvas_datetime(course.get("start_at"))
+        or _parse_canvas_datetime(course.get("created_at"))
+    )
+    end = (
+        _parse_canvas_datetime(term.get("end_at"))
+        or _parse_canvas_datetime(course.get("end_at"))
+        or _parse_canvas_datetime(course.get("conclude_at"))
+    )
+    return start, end
+
+
+def _parse_first_datetime(values: Iterable[Optional[str]]) -> Optional[datetime]:
+    for value in values:
+        parsed = _parse_canvas_datetime(value)
+        if parsed:
+            return parsed
+    return None
+
+
+def _course_recent_activity(course: Dict[str, Any]) -> Optional[datetime]:
+    enrollments = course.get("enrollments") or []
+    enrollment_activity = _parse_first_datetime(
+        enrollment.get("last_activity_at") for enrollment in enrollments
+    )
+    if enrollment_activity:
+        return enrollment_activity
+
+    return _parse_first_datetime(
+        [
+            course.get("last_activity_at"),
+            course.get("updated_at"),
+            course.get("created_at"),
+        ]
+    )
+
+
+def _is_current_course(course: Dict[str, Any], now: datetime) -> bool:
+    # Allow a configurable grace window so recently-ended courses stay visible briefly.
+    grace_days = _get_term_grace_period_days()
+    grace = timedelta(days=grace_days)
+    age_limit = timedelta(days=_get_max_course_age_days())
+    start, end = _course_term_dates(course)
+
+    if end and now > end + grace:
+        return False
+    if start and now < start - grace:
+        return False
+
+    if not end:
+        recent_activity = _course_recent_activity(course)
+        if recent_activity and now - recent_activity > grace + age_limit:
+            return False
+        if not recent_activity and start and now - start > grace + age_limit:
+            return False
+
+    return True
+
+
 def create_app():
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "change-me")
@@ -98,8 +200,17 @@ def create_app():
         base, token = _get_canvas_config()
         if not (base and token):
             return {"error": "Canvas not configured"}, 500
-        data = canvas_get(base, token, "/api/v1/courses", {"per_page": 50})
-        return jsonify(data)
+        params = {
+            "per_page": 100,
+            "enrollment_state": "active",
+            "include[]": ["favorites", "term", "enrollments"],
+            "state[]": ["available"],
+        }
+        courses = canvas_get(base, token, "/api/v1/courses", params, paginate=True)
+        now_utc = datetime.now(timezone.utc)
+        filtered = [course for course in courses if _is_current_course(course, now_utc)]
+        filtered.sort(key=lambda item: item.get("name") or "")
+        return jsonify(filtered)
 
     @app.get("/api/canvas/courses/<int:course_id>/assignments")
     def canvas_assignments(course_id: int):
@@ -116,13 +227,15 @@ def create_app():
         return jsonify(data)
 
     @app.get("/api/assignments")
-    def canvas_assignments_summary():
+def canvas_assignments_summary():
         base, token = _get_canvas_config()
         if not (base and token):
             return {"error": "Canvas not configured"}, 500
 
         now_utc = datetime.now(timezone.utc)
-        window_end = now_utc + timedelta(days=_get_upcoming_window_days())
+        lookback_days, lookahead_days = _get_assignment_window_days()
+        window_start = now_utc - timedelta(days=lookback_days)
+        window_end = now_utc + timedelta(days=lookahead_days)
 
         try:
             courses = canvas_get(
@@ -132,7 +245,8 @@ def create_app():
                 {
                     "per_page": 100,
                     "enrollment_state": "active",
-                    "include[]": ["favorites"],
+                    "include[]": ["favorites", "term", "enrollments"],
+                    "state[]": ["available"],
                 },
                 paginate=True,
             )
@@ -180,7 +294,7 @@ def create_app():
                 due_at = _parse_canvas_datetime(due_at_str)
                 if due_at is None:
                     continue
-                if due_at < now_utc or due_at > window_end:
+                if due_at < window_start or due_at > window_end:
                     continue
                 normalized.append(
                     {
@@ -196,6 +310,9 @@ def create_app():
                     }
                 )
 
+            if not normalized:
+                continue
+
             normalized.sort(key=lambda item: item["due_at"])
             response_courses.append(
                 {
@@ -206,10 +323,18 @@ def create_app():
                 }
             )
 
-        response_courses.sort(key=lambda item: item.get("name") or "")
+        response_courses.sort(
+            key=lambda item: item["assignments"][0]["due_at"] if item["assignments"] else ""
+        )
 
         payload: Dict[str, Any] = {
             "fetched_at": now_utc.isoformat(),
+            "window": {
+                "start": window_start.isoformat(),
+                "end": window_end.isoformat(),
+                "lookback_days": lookback_days,
+                "lookahead_days": lookahead_days,
+            },
             "courses": response_courses,
         }
         if warnings:
