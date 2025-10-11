@@ -13,8 +13,28 @@ export type CourseAssignmentsMap = Map<
 
 const courses = ref<CanvasCourseAssignments[]>([]);
 const fetchedAt = ref<string | null>(null);
+const assignmentWindow = ref<CanvasAssignmentsResponse["window"] | null>(null);
+const selectedCourseIds = ref<number[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
+
+const sanitizeCourseIds = (ids: number[]) => {
+  const availableIds = new Set(courses.value.map((course) => course.id));
+  const uniqueIds = Array.from(new Set(ids));
+  return uniqueIds.filter((id) => availableIds.has(id));
+};
+
+const setSelectedCourseIds = (ids: number[]) => {
+  selectedCourseIds.value = sanitizeCourseIds(ids);
+};
+
+const selectAllCourses = () => {
+  selectedCourseIds.value = courses.value.map((course) => course.id);
+};
+
+const clearCourseSelection = () => {
+  selectedCourseIds.value = [];
+};
 
 const loadAssignments = async (force = false) => {
   if (loading.value || (!force && courses.value.length && error.value === null)) {
@@ -24,8 +44,22 @@ const loadAssignments = async (force = false) => {
   error.value = null;
   try {
     const response: CanvasAssignmentsResponse = await getCanvasAssignments();
+    const previousIds = new Set(courses.value.map((course) => course.id));
     courses.value = response.courses ?? [];
     fetchedAt.value = response.fetched_at ?? null;
+    assignmentWindow.value = response.window ?? null;
+
+    if (!courses.value.length) {
+      selectedCourseIds.value = [];
+    } else if (!selectedCourseIds.value.length) {
+      selectAllCourses();
+    } else {
+      const validSelection = sanitizeCourseIds(selectedCourseIds.value);
+      const newCourseIds = courses.value
+        .map((course) => course.id)
+        .filter((id) => !previousIds.has(id));
+      selectedCourseIds.value = [...validSelection, ...newCourseIds.filter((id) => !validSelection.includes(id))];
+    }
   } catch (err) {
     error.value =
       err instanceof Error ? err.message : "Failed to load assignments. Please try again.";
@@ -34,8 +68,20 @@ const loadAssignments = async (force = false) => {
   }
 };
 
+const selectedCourseIdSet = computed(() => new Set(selectedCourseIds.value));
+
+const hasCourseSelection = computed(() => selectedCourseIds.value.length > 0);
+
+const visibleCourses = computed(() => {
+  if (!hasCourseSelection.value) {
+    return [];
+  }
+  const courseSet = selectedCourseIdSet.value;
+  return courses.value.filter((course) => courseSet.has(course.id));
+});
+
 const assignments = computed(() =>
-  courses.value.flatMap((course) =>
+  visibleCourses.value.flatMap((course) =>
     course.assignments.map((assignment) => ({
       ...assignment,
       course_code: course.course_code
@@ -66,7 +112,7 @@ const assignmentsByDate = computed<CourseAssignmentsMap>(() => {
 });
 
 const coursesWithAssignments = computed(() =>
-  courses.value.map((course) => ({
+  visibleCourses.value.map((course) => ({
     ...course,
     assignments: [...course.assignments].sort((a, b) => a.due_at.localeCompare(b.due_at))
   }))
@@ -77,13 +123,20 @@ const hasAssignments = computed(() => assignments.value.length > 0);
 const useAssignments = () => ({
   courses,
   fetchedAt,
+  assignmentWindow,
+  selectedCourseIds,
+  selectedCourseIdSet,
+  hasCourseSelection,
   loading,
   error,
   assignments,
   assignmentsByDate,
   hasAssignments,
   coursesWithAssignments,
-  loadAssignments
+  loadAssignments,
+  setSelectedCourseIds,
+  selectAllCourses,
+  clearCourseSelection
 });
 
 export default useAssignments;

@@ -1,3 +1,4 @@
+import calendar
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -79,22 +80,54 @@ def _get_max_course_age_days() -> int:
         return 150
 
 
-def _get_assignment_window_days() -> Tuple[int, int]:
-    raw_lookahead = os.getenv("CANVAS_ASSIGNMENT_LOOKAHEAD_DAYS")
-    raw_lookback = os.getenv("CANVAS_ASSIGNMENT_LOOKBACK_DAYS")
+def _shift_months(dt: datetime, months: int) -> datetime:
+    """Return dt shifted by a number of calendar months, clamping the day."""
+    month_index = dt.month - 1 + months
+    year = dt.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(dt.day, calendar.monthrange(year, month)[1])
+    return dt.replace(year=year, month=month, day=day)
+
+
+def _assignment_window(now: datetime) -> Tuple[datetime, datetime, int, int]:
+    raw_lookahead_days = os.getenv("CANVAS_ASSIGNMENT_LOOKAHEAD_DAYS")
+    raw_lookback_days = os.getenv("CANVAS_ASSIGNMENT_LOOKBACK_DAYS")
+
+    if raw_lookahead_days or raw_lookback_days:
+        # Allow overriding with explicit day counts.
+        try:
+            lookahead_days = int(raw_lookahead_days) if raw_lookahead_days else 90
+        except ValueError:
+            lookahead_days = 90
+        try:
+            lookback_days = int(raw_lookback_days) if raw_lookback_days else 30
+        except ValueError:
+            lookback_days = 30
+        lookahead_days = max(1, lookahead_days)
+        lookback_days = max(0, lookback_days)
+        window_start = now - timedelta(days=lookback_days)
+        window_end = now + timedelta(days=lookahead_days)
+        return window_start, window_end, lookback_days, lookahead_days
+
+    raw_lookahead_months = os.getenv("CANVAS_ASSIGNMENT_LOOKAHEAD_MONTHS")
+    raw_lookback_months = os.getenv("CANVAS_ASSIGNMENT_LOOKBACK_MONTHS")
     try:
-        lookahead = int(raw_lookahead) if raw_lookahead else 90
+        lookahead_months = int(raw_lookahead_months) if raw_lookahead_months else 3
     except ValueError:
-        lookahead = 90
+        lookahead_months = 3
     try:
-        lookback = int(raw_lookback) if raw_lookback else 30
+        lookback_months = int(raw_lookback_months) if raw_lookback_months else 1
     except ValueError:
-        lookback = 30
-    if lookahead <= 0:
-        lookahead = 90
-    if lookback < 0:
-        lookback = 0
-    return lookback, lookahead
+        lookback_months = 1
+    lookahead_months = max(1, lookahead_months)
+    lookback_months = max(0, lookback_months)
+
+    window_start = _shift_months(now, -lookback_months)
+    window_end = _shift_months(now, lookahead_months)
+
+    lookback_days = max(0, int((now - window_start).total_seconds() // 86400))
+    lookahead_days = max(1, int((window_end - now).total_seconds() // 86400))
+    return window_start, window_end, lookback_days, lookahead_days
 
 
 def _course_term_dates(course: Dict[str, Any]) -> Tuple[Optional[datetime], Optional[datetime]]:
@@ -202,15 +235,13 @@ def create_app():
             return {"error": "Canvas not configured"}, 500
         params = {
             "per_page": 100,
-            "enrollment_state": "active",
+            "enrollment_state[]": ["active", "invited_or_pending"],
             "include[]": ["favorites", "term", "enrollments"],
-            "state[]": ["available"],
+            "state[]": ["available", "completed"],
         }
         courses = canvas_get(base, token, "/api/v1/courses", params, paginate=True)
         now_utc = datetime.now(timezone.utc)
-        filtered = [course for course in courses if _is_current_course(course, now_utc)]
-        filtered.sort(key=lambda item: item.get("name") or "")
-        return jsonify(filtered)
+        return jsonify(courses)
 
     @app.get("/api/canvas/courses/<int:course_id>/assignments")
     def canvas_assignments(course_id: int):
@@ -227,15 +258,13 @@ def create_app():
         return jsonify(data)
 
     @app.get("/api/assignments")
-def canvas_assignments_summary():
+    def canvas_assignments_summary():
         base, token = _get_canvas_config()
         if not (base and token):
             return {"error": "Canvas not configured"}, 500
 
         now_utc = datetime.now(timezone.utc)
-        lookback_days, lookahead_days = _get_assignment_window_days()
-        window_start = now_utc - timedelta(days=lookback_days)
-        window_end = now_utc + timedelta(days=lookahead_days)
+        window_start, window_end, lookback_days, lookahead_days = _assignment_window(now_utc)
 
         try:
             courses = canvas_get(
@@ -244,9 +273,9 @@ def canvas_assignments_summary():
                 "/api/v1/courses",
                 {
                     "per_page": 100,
-                    "enrollment_state": "active",
+                    "enrollment_state[]": ["active", "invited_or_pending"],
                     "include[]": ["favorites", "term", "enrollments"],
-                    "state[]": ["available"],
+                    "state[]": ["available", "completed"],
                 },
                 paginate=True,
             )
@@ -262,9 +291,8 @@ def canvas_assignments_summary():
             course_id = course.get("id")
             if not course_id:
                 continue
-            if course.get("workflow_state") in {"completed", "deleted"}:
+            if course.get("workflow_state") == "deleted":
                 continue
-
             try:
                 assignments = canvas_get(
                     base,
@@ -310,22 +338,18 @@ def canvas_assignments_summary():
                     }
                 )
 
-            if not normalized:
-                continue
-
             normalized.sort(key=lambda item: item["due_at"])
+            earliest_due_at = normalized[0]["due_at"] if normalized else None
             response_courses.append(
                 {
                     "id": course_id,
                     "name": course.get("name"),
                     "course_code": course.get("course_code"),
                     "assignments": normalized,
+                    "assignments_in_window": len(normalized),
+                    "earliest_due_at": earliest_due_at,
                 }
             )
-
-        response_courses.sort(
-            key=lambda item: item["assignments"][0]["due_at"] if item["assignments"] else ""
-        )
 
         payload: Dict[str, Any] = {
             "fetched_at": now_utc.isoformat(),

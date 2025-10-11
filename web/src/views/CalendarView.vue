@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import {
   addMonths,
   subMonths,
@@ -17,8 +17,21 @@ import { RouterLink } from "vue-router";
 import useAssignments from "../stores/assignmentsStore";
 import useAuth from "../stores/authStore";
 
-const { loadAssignments, assignmentsByDate, coursesWithAssignments, loading, error, fetchedAt } =
-  useAssignments();
+const assignmentsStore = useAssignments();
+const {
+  loadAssignments,
+  assignmentsByDate,
+  coursesWithAssignments,
+  loading,
+  error,
+  fetchedAt,
+  courses,
+  selectedCourseIds,
+  hasCourseSelection,
+  setSelectedCourseIds,
+  selectAllCourses,
+  clearCourseSelection
+} = assignmentsStore;
 const { isAuthenticated, displayName, signOut } = useAuth();
 
 const currentMonth = ref(startOfMonth(new Date()));
@@ -91,6 +104,43 @@ const courseColorMap = computed<Record<number, string>>(() => {
 
 const hasAssignments = computed(() => coursesWithAssignments.value.length > 0);
 const welcomeLabel = computed(() => displayName.value || "");
+
+const courseSelectionOptions = computed(() =>
+  courses.value.map((course) => ({
+    id: course.id,
+    name: course.name ?? "Untitled course",
+    courseCode: course.course_code,
+    assignmentsInWindow: course.assignments_in_window ?? course.assignments.length
+  }))
+);
+
+const selectedCourseIdsModel = computed<number[]>({
+  get: () => selectedCourseIds.value,
+  set: (value) => setSelectedCourseIds(value)
+});
+
+const totalCourses = computed(() => courses.value.length);
+const selectedCourseCount = computed(() => selectedCourseIds.value.length);
+
+const showCourseFilter = ref(false);
+
+const toggleCourseFilter = () => {
+  showCourseFilter.value = !showCourseFilter.value;
+};
+
+const handleSelectAllCourses = () => {
+  selectAllCourses();
+};
+
+const handleClearCourseSelection = () => {
+  clearCourseSelection();
+};
+
+watch(hasCourseSelection, (value) => {
+  if (!value && totalCourses.value > 0) {
+    showCourseFilter.value = true;
+  }
+});
 
 const handleSignOut = async () => {
   await signOut();
@@ -206,17 +256,118 @@ const handleSignOut = async () => {
           </button>
         </div>
 
+        <div
+          v-if="courseSelectionOptions.length"
+          class="border border-border/60 bg-background/50 rounded-lg px-4 py-3 space-y-3"
+        >
+          <button
+            type="button"
+            class="w-full flex items-center justify-between gap-3 text-left"
+            @click="toggleCourseFilter"
+          >
+            <div class="flex flex-col">
+              <span class="text-sm font-medium text-foreground">Filter classes</span>
+              <span class="text-xs text-muted-foreground">
+                {{ selectedCourseCount }} of {{ totalCourses }} selected
+              </span>
+            </div>
+            <span
+              class="text-xs font-medium px-2 py-1 rounded-md border border-border text-muted-foreground"
+            >
+              {{ showCourseFilter ? "Hide" : "Show" }}
+            </span>
+          </button>
+          <Transition name="fade">
+            <div
+              v-if="showCourseFilter"
+              class="space-y-3 border-t border-border/60 pt-3"
+            >
+              <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p class="text-sm text-muted-foreground">
+                  Filter the calendar to only show assignments from the classes you select.
+                </p>
+                <div class="flex items-center gap-2">
+                  <button
+                    type="button"
+                    class="px-3 py-1.5 rounded-md border border-border text-xs font-medium text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                    :disabled="loading"
+                    @click="handleSelectAllCourses"
+                  >
+                    Select all
+                  </button>
+                  <button
+                    type="button"
+                    class="px-3 py-1.5 rounded-md border border-border text-xs font-medium text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                    :disabled="!hasCourseSelection || loading"
+                    @click="handleClearCourseSelection"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <label
+                  v-for="course in courseSelectionOptions"
+                  :key="course.id"
+                  class="cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    class="sr-only"
+                    :value="course.id"
+                    v-model="selectedCourseIdsModel"
+                  />
+                  <span
+                    class="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs sm:text-sm transition-colors"
+                    :class="
+                      selectedCourseIdsModel.includes(course.id)
+                        ? 'bg-primary/10 border-primary/60 text-foreground font-medium'
+                        : 'bg-background border-border text-muted-foreground hover:text-foreground'
+                    "
+                  >
+                    <span class="truncate max-w-[11rem] sm:max-w-[14rem]">
+                      {{ course.name }}
+                      <template v-if="course.courseCode">
+                        <span class="text-[0.65rem] text-muted-foreground uppercase">
+                          ({{ course.courseCode }})
+                        </span>
+                      </template>
+                    </span>
+                    <span
+                      v-if="course.assignmentsInWindow"
+                      class="text-[0.65rem] px-2 py-0.5 rounded-full bg-primary/20 text-primary-foreground/90 font-semibold whitespace-nowrap"
+                    >
+                      {{ course.assignmentsInWindow }}
+                    </span>
+                  </span>
+                </label>
+              </div>
+            </div>
+          </Transition>
+        </div>
+
         <div v-if="loading" class="border border-border bg-card rounded-xl p-6 text-center">
           <p class="text-muted-foreground">Syncing Canvas assignments...</p>
         </div>
 
         <div
-          v-if="!loading && !error && !hasAssignments"
+          v-if="!loading && !error && !hasCourseSelection"
+          class="border border-border bg-card rounded-xl p-6 text-center space-y-3"
+        >
+          <h2 class="text-lg font-semibold text-foreground">Nothing selected yet</h2>
+          <p class="text-sm text-muted-foreground max-w-md mx-auto">
+            Choose one or more classes above to populate the calendar with their assignments.
+          </p>
+        </div>
+
+        <div
+          v-else-if="!loading && !error && !hasAssignments"
           class="border border-border bg-card rounded-xl p-6 text-center space-y-3"
         >
           <h2 class="text-lg font-semibold text-foreground">No assignments found</h2>
           <p class="text-sm text-muted-foreground max-w-md mx-auto">
-            Connect your Canvas account or refresh the sync to pull in upcoming coursework.
+            Connect your Canvas account, adjust your class selection, or refresh the sync to pull in
+            upcoming coursework.
           </p>
         </div>
 

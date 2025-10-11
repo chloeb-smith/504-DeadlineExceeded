@@ -1,18 +1,25 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRouter, RouterLink } from "vue-router";
 import useAuth from "../stores/authStore";
 import useAssignments from "../stores/assignmentsStore";
 
 const router = useRouter();
 const { currentUser, displayName, signOut } = useAuth();
+const assignmentsStore = useAssignments();
 const {
   loadAssignments,
   assignments,
   coursesWithAssignments,
+  courses,
+  selectedCourseIds,
+  hasCourseSelection,
+  selectAllCourses,
+  clearCourseSelection,
+  setSelectedCourseIds,
   loading: assignmentsLoading,
   error: assignmentsError
-} = useAssignments();
+} = assignmentsStore;
 
 onMounted(() => {
   loadAssignments();
@@ -43,6 +50,44 @@ const courseSummaries = computed(() =>
     nextDue: course.assignments[0]?.due_at_display ?? "No upcoming work"
   }))
 );
+
+const courseSelectionOptions = computed(() =>
+  courses.value.map((course) => ({
+    id: course.id,
+    name: course.name ?? "Untitled course",
+    courseCode: course.course_code,
+    assignmentsInWindow: course.assignments_in_window ?? course.assignments.length,
+    hasAssignments: (course.assignments_in_window ?? course.assignments.length) > 0
+  }))
+);
+
+const selectedCourseIdsModel = computed<number[]>({
+  get: () => selectedCourseIds.value,
+  set: (value) => setSelectedCourseIds(value)
+});
+
+const totalCourses = computed(() => courses.value.length);
+const selectedCourseCount = computed(() => selectedCourseIds.value.length);
+
+const showCourseFilter = ref(false);
+
+const toggleCourseFilter = () => {
+  showCourseFilter.value = !showCourseFilter.value;
+};
+
+const handleSelectAllCourses = () => {
+  selectAllCourses();
+};
+
+const handleClearCourseSelection = () => {
+  clearCourseSelection();
+};
+
+watch(hasCourseSelection, (value) => {
+  if (!value && totalCourses.value > 0) {
+    showCourseFilter.value = true;
+  }
+});
 </script>
 
 <template>
@@ -112,6 +157,96 @@ const courseSummaries = computed(() =>
           </div>
 
           <div
+            v-if="courseSelectionOptions.length"
+            class="border border-border/60 bg-background/50 rounded-lg px-4 py-3 space-y-3"
+          >
+            <button
+              type="button"
+              class="w-full flex items-center justify-between gap-3 text-left"
+              @click="toggleCourseFilter"
+            >
+              <div class="flex flex-col">
+                <span class="text-sm font-medium text-foreground">Filter classes</span>
+                <span class="text-xs text-muted-foreground">
+                  {{ selectedCourseCount }} of {{ totalCourses }} selected
+                </span>
+              </div>
+              <span
+                class="text-xs font-medium px-2 py-1 rounded-md border border-border text-muted-foreground"
+              >
+                {{ showCourseFilter ? "Hide" : "Show" }}
+              </span>
+            </button>
+            <Transition name="fade">
+              <div
+                v-if="showCourseFilter"
+                class="space-y-3 border-t border-border/60 pt-3"
+              >
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <p class="text-sm text-muted-foreground">
+                    Select the classes you want included in the dashboard.
+                  </p>
+                  <div class="flex items-center gap-2">
+                    <button
+                      type="button"
+                      class="px-3 py-1.5 rounded-md border border-border text-xs font-medium text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                      :disabled="assignmentsLoading"
+                      @click="handleSelectAllCourses"
+                    >
+                      Select all
+                    </button>
+                    <button
+                      type="button"
+                      class="px-3 py-1.5 rounded-md border border-border text-xs font-medium text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                      :disabled="!hasCourseSelection || assignmentsLoading"
+                      @click="handleClearCourseSelection"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <label
+                    v-for="course in courseSelectionOptions"
+                    :key="course.id"
+                    class="cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      class="sr-only"
+                      :value="course.id"
+                      v-model="selectedCourseIdsModel"
+                    />
+                    <span
+                      class="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs sm:text-sm transition-colors"
+                      :class="
+                        selectedCourseIdsModel.includes(course.id)
+                          ? 'bg-primary/10 border-primary/60 text-foreground font-medium'
+                          : 'bg-background border-border text-muted-foreground hover:text-foreground'
+                      "
+                    >
+                      <span class="truncate max-w-[11rem] sm:max-w-[14rem]">
+                        {{ course.name }}
+                        <template v-if="course.courseCode">
+                          <span class="text-[0.65rem] text-muted-foreground uppercase">
+                            ({{ course.courseCode }})
+                          </span>
+                        </template>
+                      </span>
+                      <span
+                        v-if="course.assignmentsInWindow"
+                        class="text-[0.65rem] px-2 py-0.5 rounded-full bg-primary/20 text-primary-foreground/90 font-semibold whitespace-nowrap"
+                      >
+                        {{ course.assignmentsInWindow }}
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+            </Transition>
+          </div>
+
+          <div
             v-if="assignmentsError"
             class="border border-destructive/20 bg-destructive/10 text-destructive text-sm rounded-lg px-4 py-3 flex items-start justify-between gap-3"
           >
@@ -130,6 +265,13 @@ const courseSummaries = computed(() =>
             class="border border-border bg-background/60 rounded-lg px-4 py-6 text-center text-sm text-muted-foreground"
           >
             Syncing assignments from Canvas...
+          </div>
+
+          <div
+            v-else-if="!hasCourseSelection"
+            class="border border-border bg-background/60 rounded-lg px-4 py-6 text-center text-sm text-muted-foreground"
+          >
+            Choose at least one class above to see its upcoming assignments here.
           </div>
 
           <ul
@@ -168,7 +310,8 @@ const courseSummaries = computed(() =>
             v-else
             class="border border-border bg-background/60 rounded-lg px-4 py-6 text-center text-sm text-muted-foreground"
           >
-            No upcoming assignments detected. Try syncing again or visiting the calendar.
+            No upcoming assignments detected for the selected classes. Try syncing again or adjust
+            your selection.
           </div>
         </div>
 
@@ -180,7 +323,14 @@ const courseSummaries = computed(() =>
             </p>
           </div>
 
-          <ul v-if="courseSummaries.length" class="space-y-3">
+          <div
+            v-if="!hasCourseSelection"
+            class="border border-border bg-background/60 rounded-lg px-4 py-6 text-center text-sm text-muted-foreground"
+          >
+            Pick one or more classes to see their assignment summary.
+          </div>
+
+          <ul v-else-if="courseSummaries.length" class="space-y-3">
             <li
               v-for="course in courseSummaries"
               :key="course.id"
@@ -207,7 +357,8 @@ const courseSummaries = computed(() =>
             v-else
             class="border border-border bg-background/60 rounded-lg px-4 py-6 text-center text-sm text-muted-foreground"
           >
-            No courses found yet. Sync your assignments to populate this list.
+            No assignments found for the selected classes in the current window. Try syncing again or
+            adjust your selection.
           </div>
         </div>
       </section>

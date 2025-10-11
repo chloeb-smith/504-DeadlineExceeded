@@ -19,11 +19,19 @@ export interface CanvasCourseAssignments {
   name: string;
   course_code?: string | null;
   assignments: CanvasAssignment[];
+  assignments_in_window?: number;
+  earliest_due_at?: string | null;
 }
 
 export interface CanvasAssignmentsResponse {
   fetched_at: string;
   courses: CanvasCourseAssignments[];
+  window?: {
+    start: string;
+    end: string;
+    lookback_days: number;
+    lookahead_days: number;
+  };
 }
 
 export const getHealth = () => api.get("/api/health").then((r) => r.data);
