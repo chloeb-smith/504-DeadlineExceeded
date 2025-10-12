@@ -12,11 +12,8 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 from requests import HTTPError
 
-<<<<<<< HEAD
 from assistant import GeminiConfigurationError, analyze_assignments, get_assignment_help
-=======
 from auth_service import AuthServiceError, login_user, register_user
->>>>>>> main
 from canvas import canvas_get
 from store import add_item, list_items
 
@@ -274,23 +271,6 @@ def create_app():
     def hello():
         return jsonify({"message": "Hello from Flask API"})
 
-<<<<<<< HEAD
-    @app.get("/")
-    def home():
-        return jsonify(
-            {
-                "message": "Flask API is running.",
-                "next_steps": "The web UI is served by the Vite dev server. Run `npm run dev` inside the web/ directory and open http://localhost:5173/.",
-            }
-        )
-
-    @app.get("/<path:unused>")
-    def spa_fallback(unused: str):
-        return {
-            "error": "Route not handled by Flask API.",
-            "hint": "Use the Vite dev server for front-end routes.",
-        }, 404
-=======
     @app.post("/api/auth/register")
     def auth_register():
         payload = request.get_json(silent=True) or {}
@@ -340,7 +320,6 @@ def create_app():
             return {"error": exc.code, "message": str(exc)}, status
 
         return jsonify({"tokens": tokens}), 200
->>>>>>> main
 
     @app.post("/api/items")
     def create_item():
