@@ -12,6 +12,11 @@ export interface CanvasAssignment {
   points_possible?: number | null;
   course_id: number;
   course_name: string;
+  course_code?: string | null;
+  priority_score?: number | null;
+  priority_label?: string | null;
+  priority_rationale?: string | null;
+  suggested_milestones?: AssignmentMilestone[];
 }
 
 export interface CanvasCourseAssignments {
@@ -32,11 +37,32 @@ export interface CanvasAssignmentsResponse {
     lookback_days: number;
     lookahead_days: number;
   };
+  analysis?: AssignmentAnalysisResponse;
+  analysis_error?: string | null;
 }
 
 export interface AssistantMessage {
   role: "user" | "assistant";
   content: string;
+}
+
+export interface AssignmentMilestone {
+  name: string;
+  due_by?: string | null;
+  notes?: string | null;
+}
+
+export interface AssignmentPriorityInsight {
+  id: number;
+  priority_score: number | null;
+  priority_label: string | null;
+  rationale: string | null;
+  suggested_milestones: AssignmentMilestone[];
+}
+
+export interface AssignmentAnalysisResponse {
+  generated_at: string;
+  assignments: AssignmentPriorityInsight[];
 }
 
 export interface AssistantContextCourseAssignment {
@@ -48,6 +74,10 @@ export interface AssistantContextCourseAssignment {
   course_code?: string | null;
   points_possible?: number | null;
   description?: string | null;
+  priority_score?: number | null;
+  priority_label?: string | null;
+  priority_rationale?: string | null;
+  suggested_milestones?: AssignmentMilestone[];
 }
 
 export interface AssistantContextCourse {

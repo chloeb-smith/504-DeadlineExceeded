@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Optional, Sequence
@@ -28,7 +30,7 @@ _LEGACY_MODEL_ALIASES = {
 }
 
 
-def _clean_text(value: Any, *, limit: int = 360) -> Optional[str]:
+def _clean_text(value: Any, *, limit: int = 900) -> Optional[str]:
     if not value or not isinstance(value, str):
         return None
     collapsed = " ".join(value.split())
@@ -41,6 +43,85 @@ def _clean_text(value: Any, *, limit: int = 360) -> Optional[str]:
 
 def _clean_keyword(keyword: str) -> str:
     return keyword.strip()
+
+
+_SENSITIVE_PATTERNS = [
+    ("weapon", "[redacted]"),
+    ("suicide", "[redacted]"),
+    ("self-harm", "[redacted]"),
+    ("terror", "[redacted]"),
+    ("bomb", "[redacted]"),
+    ("explosive", "[redacted]"),
+    ("drugs", "[redacted]"),
+    ("harass", "[redacted]"),
+]
+
+
+def _sanitize_description(text: Optional[str]) -> Optional[str]:
+    if not isinstance(text, str):
+        return None
+    sanitized = text
+    for pattern, replacement in _SENSITIVE_PATTERNS:
+        sanitized = (
+            sanitized.replace(pattern, replacement)
+            .replace(pattern.title(), replacement)
+            .replace(pattern.upper(), replacement)
+        )
+    return sanitized
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    """Attempt to coerce a value into a float."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _safe_parse_datetime(value: Any) -> Optional[datetime]:
+    """Parse common ISO-8601 timestamps into timezone-aware datetimes."""
+    if not value or not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    if not candidate:
+        return None
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _normalize_json_text(raw: Optional[str]) -> str:
+    if not raw:
+        return ""
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[: -3]
+    return cleaned.strip()
+
+
+def _extract_candidate_text(response: Any) -> str:
+    parts: List[str] = []
+    for candidate in getattr(response, "candidates", []) or []:
+        content = getattr(candidate, "content", None)
+        if not content:
+            continue
+        for part in getattr(content, "parts", []) or []:
+            text = getattr(part, "text", None)
+            if text:
+                parts.append(text)
+    return "\n".join(parts).strip()
 
 
 def _resolve_model_name(raw_name: Optional[str]) -> str:
@@ -84,7 +165,7 @@ def _normalize_context(context: Optional[Dict[str, Any]]) -> Optional[List[Dict[
             name = (assignment.get("name") or "").strip()
             if not name:
                 continue
-            description = _clean_text(assignment.get("description"))
+            description = _clean_text(_sanitize_description(assignment.get("description")))
             clean_assignments.append(
                 {
                     "id": assignment.get("id"),
@@ -261,3 +342,200 @@ def get_assignment_help(
         model=model_name,
         usage=usage,
     )
+
+
+def _build_fallback_priority_output(
+    cleaned_items: Sequence[Dict[str, Any]],
+    generated_at: str,
+) -> Dict[str, Any]:
+    """Provide deterministic priority scores when the model returns no content."""
+    now = datetime.now(timezone.utc)
+    point_values = [
+        value
+        for value in (_coerce_float(item.get('points_possible')) for item in cleaned_items)
+        if value is not None
+    ]
+    max_points = max(point_values) if point_values else 0.0
+
+    assignments_output: List[Dict[str, Any]] = []
+    for item in cleaned_items:
+        due_at = _safe_parse_datetime(item.get('due_at'))
+        if due_at is None:
+            due_score = 55.0
+        else:
+            delta_hours = (due_at - now).total_seconds() / 3600
+            if delta_hours <= 0:
+                due_score = 95.0
+            elif delta_hours <= 24:
+                due_score = 88.0
+            elif delta_hours <= 72:
+                due_score = 78.0
+            elif delta_hours <= 168:
+                due_score = 70.0
+            elif delta_hours <= 336:
+                due_score = 60.0
+            else:
+                due_score = 50.0
+
+        points_value = _coerce_float(item.get('points_possible')) or 0.0
+        points_bonus = 0.0
+        if max_points > 0:
+            points_bonus = min(12.0, (points_value / max_points) * 12.0)
+
+        description = item.get('description') or ""
+        workload_bonus = 4.0 if len(description) > 280 else 0.0
+
+        raw_score = due_score + points_bonus + workload_bonus
+        priority_score = max(0, min(100, int(round(raw_score))))
+        assignments_output.append(
+            {
+                'id': item['id'],
+                'priority_score': priority_score,
+            }
+        )
+
+    return {'generated_at': generated_at, 'assignments': assignments_output}
+
+
+def analyze_assignments(
+    assignments: Sequence[Dict[str, Any]],
+    *,
+    include_descriptions: bool = True,
+    _attempt: int = 1,
+) -> Dict[str, Any]:
+    cleaned_items: List[Dict[str, Any]] = []
+    for raw in assignments:
+        if not isinstance(raw, dict):
+            continue
+        assignment_id = raw.get('id')
+        if assignment_id is None:
+            continue
+        name = _clean_text(raw.get('name'), limit=200)
+        if not name:
+            continue
+        description_source = _sanitize_description(raw.get('description')) if include_descriptions else None
+        cleaned_items.append(
+            {
+                'id': assignment_id,
+                'name': name,
+                'course_name': _clean_text(raw.get('course_name'), limit=160),
+                'course_code': _clean_text(raw.get('course_code'), limit=40),
+                'due_at': raw.get('due_at'),
+                'due_at_display': raw.get('due_at_display'),
+                'description': _clean_text(description_source, limit=1500),
+                'points_possible': raw.get('points_possible'),
+            }
+        )
+
+    generated_at = datetime.now(timezone.utc).isoformat()
+    if not cleaned_items:
+        return {'generated_at': generated_at, 'assignments': []}
+
+    assignments_json = json.dumps(cleaned_items, ensure_ascii=False)
+    prompt = (
+        "You are an academic coach helping a college student prioritize upcoming assignments. "
+        "You will receive a JSON array of assignments with id, course details, due dates, descriptions, and points. "
+        "Evaluate the relative urgency and workload of each assignment, considering due date proximity, workload implied by the description, complexity, and point value. "
+        "Return only a priority score between 0 and 100 (higher means more urgent/important). "
+        "Respond with JSON ONLY in the following structure:\n"
+        "{\n"
+        '  "assignments": [\n'
+        "    {\n"
+        '      "id": 123,\n'
+        '      "priority_score": 85\n'
+        "    }\n"
+        "  ]\n"
+        "}\n\n"
+        f"Assignments JSON:\n{assignments_json}"
+    )
+
+    model = _get_model()
+    try:
+        response = model.generate_content(
+            prompt,
+            request_options={'timeout': float(os.getenv('GEMINI_TIMEOUT_SECONDS', '20'))},
+        )
+    except NotFound as exc:
+        resolved_name = _resolve_model_name(os.getenv('GEMINI_MODEL_NAME'))
+        message = (
+            f"Gemini model '{resolved_name}' is unavailable. "
+            'Update GEMINI_MODEL_NAME to a supported model (for example, models/gemini-flash-latest).'
+        )
+        raise GeminiConfigurationError(message) from exc
+    except Exception as exc:  # pylint: disable=broad-except
+        raise RuntimeError(f'Gemini assignment analysis failed: {exc}') from exc
+
+    try:
+        text = (response.text or '').strip()
+    except ValueError:
+        text = _normalize_json_text(_extract_candidate_text(response))
+        if not text:
+            if include_descriptions and _attempt == 1:
+                return analyze_assignments(assignments, include_descriptions=False, _attempt=_attempt + 1)
+            return _build_fallback_priority_output(cleaned_items, generated_at)
+
+    text = _normalize_json_text(text)
+
+    if not text:
+        if include_descriptions and _attempt == 1:
+            return analyze_assignments(assignments, include_descriptions=False, _attempt=_attempt + 1)
+        return _build_fallback_priority_output(cleaned_items, generated_at)
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        fallback_text = _normalize_json_text(_extract_candidate_text(response))
+        if fallback_text and fallback_text != text:
+            try:
+                parsed = json.loads(fallback_text)
+            except json.JSONDecodeError as fallback_exc:
+                if include_descriptions and _attempt == 1:
+                    return analyze_assignments(assignments, include_descriptions=False, _attempt=_attempt + 1)
+                return _build_fallback_priority_output(cleaned_items, generated_at)
+        else:
+            if include_descriptions and _attempt == 1:
+                return analyze_assignments(assignments, include_descriptions=False, _attempt=_attempt + 1)
+            return _build_fallback_priority_output(cleaned_items, generated_at)
+
+    assignments_output: List[Dict[str, Any]] = []
+    insight_lookup = {item['id']: item for item in cleaned_items}
+
+    for entry in parsed.get('assignments', []) or []:
+        if not isinstance(entry, dict):
+            continue
+        assignment_id = entry.get('id')
+        if assignment_id not in insight_lookup:
+            continue
+
+        priority_score = entry.get('priority_score')
+        try:
+            if priority_score is not None:
+                priority_score = max(0, min(100, int(priority_score)))
+        except (TypeError, ValueError):
+            priority_score = None
+
+        if priority_score is None:
+            fallback_priority = _build_fallback_priority_output(
+                [insight_lookup[assignment_id]],
+                generated_at,
+            )['assignments'][0]['priority_score']
+            priority_score = fallback_priority
+
+        assignments_output.append(
+            {
+                'id': assignment_id,
+                'priority_score': priority_score,
+            }
+        )
+
+    if not assignments_output:
+        return _build_fallback_priority_output(cleaned_items, generated_at)
+
+    return {
+        'generated_at': generated_at,
+        'assignments': assignments_output,
+    }
+
+
+
+

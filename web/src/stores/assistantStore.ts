@@ -92,32 +92,59 @@ const sanitizeContext = (context?: AssistantContext | null): AssistantRequestPay
     if (typeof value !== "string") return null;
     const normalized = value.trim();
     if (!normalized) return null;
-    return normalized.length > 360 ? `${normalized.slice(0, 360).trim()}…` : normalized;
+    return normalized.length > 360 ? `${normalized.slice(0, 360).trim()}...` : normalized;
+  };
+
+  const sanitizeMilestones = (milestones: unknown) => {
+    if (!Array.isArray(milestones)) {
+      return [];
+    }
+    return milestones
+      .filter((item) => item && typeof item === "object")
+      .slice(0, 4)
+      .map((milestone) => ({
+        name: String((milestone as Record<string, unknown>).name ?? "").trim(),
+        due_by:
+          typeof (milestone as Record<string, unknown>).due_by === "string" &&
+          ((milestone as Record<string, unknown>).due_by as string).trim().length
+            ? ((milestone as Record<string, unknown>).due_by as string).trim()
+            : null,
+        notes:
+          typeof (milestone as Record<string, unknown>).notes === "string" &&
+          ((milestone as Record<string, unknown>).notes as string).trim().length
+            ? ((milestone as Record<string, unknown>).notes as string).trim()
+            : null
+      }))
+      .filter((milestone) => milestone.name.length);
   };
 
   const courses = context.courses
-      .filter((course) => course && typeof course === "object")
-      .slice(0, 5)
-      .map((course) => ({
-        id: course.id,
-        name: course.name,
-        course_code: course.course_code ?? null,
-        assignments: (course.assignments ?? [])
-          .filter((assignment) => assignment && typeof assignment === "object")
-          .slice(0, 6)
-          .map((assignment) => ({
-            id: assignment.id,
-            name: assignment.name,
-            due_at: assignment.due_at ?? null,
-            due_at_display: assignment.due_at_display ?? null,
-            course_name: assignment.course_name ?? null,
-            course_code: assignment.course_code ?? null,
-            points_possible: assignment.points_possible ?? null,
-            description: clampDescription(assignment.description ?? null)
-          }))
-      }))
-      .filter((course) => course.assignments.length || course.name?.trim());
-
+    .filter((course) => course && typeof course === "object")
+    .slice(0, 5)
+    .map((course) => ({
+      id: course.id,
+      name: course.name,
+      course_code: course.course_code ?? null,
+      assignments: (course.assignments ?? [])
+        .filter((assignment) => assignment && typeof assignment === "object")
+        .slice(0, 6)
+        .map((assignment) => ({
+          id: assignment.id,
+          name: assignment.name,
+          due_at: assignment.due_at ?? null,
+          due_at_display: assignment.due_at_display ?? null,
+          course_name: assignment.course_name ?? null,
+          course_code: assignment.course_code ?? null,
+          points_possible: assignment.points_possible ?? null,
+          description: clampDescription(assignment.description ?? null),
+          priority_score:
+            typeof assignment.priority_score === "number" ? assignment.priority_score : null,
+          priority_label: assignment.priority_label ?? null,
+          priority_rationale: assignment.priority_rationale ?? null,
+          suggested_milestones: sanitizeMilestones(assignment.suggested_milestones)
+        }))
+    }))
+    .filter((course) => course.assignments.length || course.name?.trim());
   if (!courses.length) {
     return undefined;
   }

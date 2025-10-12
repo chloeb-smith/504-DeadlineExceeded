@@ -1,5 +1,6 @@
 import calendar
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -11,11 +12,12 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 from requests import HTTPError
 
-from assistant import GeminiConfigurationError, get_assignment_help
+from assistant import GeminiConfigurationError, analyze_assignments, get_assignment_help
 from canvas import canvas_get
 from store import add_item, list_items
 
 load_dotenv()
+_RETRY_SECS_PATTERN = re.compile(r"retry (?:in|after)\s+([0-9]+(?:\.[0-9]+)?)s", re.IGNORECASE)
 
 DEV_UID = os.getenv("DEV_UID", "dev-user-1")
 CANVAS_CACHE_SECONDS = max(0, int(os.getenv("CANVAS_CACHE_SECONDS", "120")))
@@ -83,6 +85,16 @@ def _store_assignments_cache(cache_key: str, payload: Dict[str, Any]) -> None:
             oldest_key = min(_assignments_cache, key=lambda key: _assignments_cache[key]["timestamp"])
             if oldest_key != cache_key:
                 _assignments_cache.pop(oldest_key, None)
+
+
+def _extract_retry_after_seconds(message: str) -> Optional[float]:
+    match = _RETRY_SECS_PATTERN.search(message)
+    if match:
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return None
+    return None
 
 
 def _get_past_due_grace_days() -> int:
@@ -258,6 +270,22 @@ def create_app():
     def hello():
         return jsonify({"message": "Hello from Flask API"})
 
+    @app.get("/")
+    def home():
+        return jsonify(
+            {
+                "message": "Flask API is running.",
+                "next_steps": "The web UI is served by the Vite dev server. Run `npm run dev` inside the web/ directory and open http://localhost:5173/.",
+            }
+        )
+
+    @app.get("/<path:unused>")
+    def spa_fallback(unused: str):
+        return {
+            "error": "Route not handled by Flask API.",
+            "hint": "Use the Vite dev server for front-end routes.",
+        }, 404
+
     @app.post("/api/items")
     def create_item():
         title = (request.get_json() or {}).get("title", "Untitled")
@@ -363,6 +391,7 @@ def create_app():
                 break
 
         response_courses: List[Dict[str, Any]] = []
+        analysis_candidates: List[Dict[str, Any]] = []
         warnings: List[Dict[str, Any]] = []
 
         def load_course(course: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
@@ -410,6 +439,21 @@ def create_app():
                         "points_possible": assignment.get("points_possible"),
                         "course_id": course_id,
                         "course_name": course.get("name"),
+                        "course_code": course.get("course_code"),
+                    }
+                )
+                analysis_candidates.append(
+                    {
+                        "id": assignment.get("id"),
+                        "name": assignment.get("name"),
+                        "description": assignment.get("description"),
+                        "due_at": due_at.isoformat(),
+                        "due_at_display": _format_due_display(due_at),
+                        "html_url": assignment.get("html_url"),
+                        "points_possible": assignment.get("points_possible"),
+                        "course_id": course_id,
+                        "course_name": course.get("name"),
+                        "course_code": course.get("course_code"),
                     }
                 )
     
@@ -465,10 +509,68 @@ def create_app():
         }
         if warnings:
             payload["warnings"] = warnings
-    
+
+        if analysis_candidates:
+            analysis_candidates.sort(key=lambda item: item.get("due_at") or "")
+            analysis_candidates = analysis_candidates[:7]
+            analysis_limit_raw = os.getenv("ASSIGNMENT_ANALYSIS_LIMIT", "").strip()
+            chunk_size = 6
+            if analysis_limit_raw:
+                try:
+                    parsed_limit = int(analysis_limit_raw)
+                    if parsed_limit > 0:
+                        chunk_size = parsed_limit
+                    elif parsed_limit == 0:
+                        chunk_size = len(analysis_candidates)
+                except ValueError:
+                    chunk_size = 6
+            if chunk_size <= 0:
+                chunk_size = len(analysis_candidates)
+
+            aggregated: List[Dict[str, Any]] = []
+            analysis_errors: List[str] = []
+            generated_at: Optional[str] = None
+            retry_after_seconds: Optional[float] = None
+
+            for offset in range(0, len(analysis_candidates), chunk_size):
+                chunk = analysis_candidates[offset : offset + chunk_size]
+                if not chunk:
+                    continue
+                try:
+                    chunk_result = analyze_assignments(chunk)
+                except GeminiConfigurationError as exc:
+                    analysis_errors.append(str(exc))
+                    break
+                except RuntimeError as exc:
+                    error_message = str(exc)
+                    analysis_errors.append(error_message)
+                    if "429" in error_message:
+                        retry_after = _extract_retry_after_seconds(error_message)
+                        if retry_after is not None:
+                            if retry_after_seconds is None:
+                                retry_after_seconds = retry_after
+                            else:
+                                retry_after_seconds = max(retry_after_seconds, retry_after)
+                        break
+                    continue
+
+                if chunk_result.get("generated_at"):
+                    generated_at = chunk_result["generated_at"]
+                aggregated.extend(chunk_result.get("assignments", []))
+
+            if aggregated:
+                payload["analysis"] = {
+                    "generated_at": generated_at,
+                    "assignments": aggregated,
+                }
+            if analysis_errors:
+                payload["analysis_error"] = "; ".join(dict.fromkeys(analysis_errors))
+            if retry_after_seconds is not None:
+                payload["analysis_retry_after_seconds"] = round(retry_after_seconds, 2)
+
         if cache_key:
             _store_assignments_cache(cache_key, payload)
-    
+
         return jsonify(payload)
 
     @app.post("/api/assistant/help")

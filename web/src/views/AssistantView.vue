@@ -113,7 +113,7 @@ const stripHtml = (value: string | null | undefined) =>
 
 const summarizeText = (value: string, limit = MAX_CONTEXT_DESCRIPTION) => {
   if (!value) return "";
-  return value.length > limit ? `${value.slice(0, limit).trim()}…` : value;
+  return value.length > limit ? `${value.slice(0, limit).trim()}...` : value;
 };
 
 const assistantContext = computed(() => {
@@ -166,9 +166,6 @@ const handleAddKeyword = () => {
 const handleSubmit = async () => {
   if (!question.value.trim() || assistantLoading.value) return;
   await sendMessage(question.value, assistantContext.value);
-  if (!assistantError.value) {
-    question.value = "";
-  }
 };
 
 const handleNewChat = () => {
@@ -344,7 +341,7 @@ const totalTokens = computed(() => usage.value?.total_tokens ?? 0);
                   @click="toggleKeyword(keyword)"
                   aria-label="Remove keyword"
                 >
-                  ×
+                  &times;
                 </button>
               </span>
             </div>

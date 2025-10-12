@@ -3,7 +3,8 @@ import {
   getCanvasAssignments,
   type CanvasAssignmentsResponse,
   type CanvasCourseAssignments,
-  type CanvasAssignment
+  type CanvasAssignment,
+  type AssignmentPriorityInsight
 } from "../api";
 
 export type CourseAssignmentsMap = Map<
@@ -17,6 +18,9 @@ const assignmentWindow = ref<CanvasAssignmentsResponse["window"] | null>(null);
 const selectedCourseIds = ref<number[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
+const analysisGeneratedAt = ref<string | null>(null);
+const analysisError = ref<string | null>(null);
+const assignmentInsights = ref<Record<number, AssignmentPriorityInsight>>({});
 
 const sanitizeCourseIds = (ids: number[]) => {
   const availableIds = new Set(courses.value.map((course) => course.id));
@@ -42,12 +46,54 @@ const loadAssignments = async (force = false) => {
   }
   loading.value = true;
   error.value = null;
+  analysisError.value = null;
   try {
     const response: CanvasAssignmentsResponse = await getCanvasAssignments(force);
     const previousIds = new Set(courses.value.map((course) => course.id));
     courses.value = response.courses ?? [];
     fetchedAt.value = response.fetched_at ?? null;
     assignmentWindow.value = response.window ?? null;
+
+    const insightsRecord: Record<number, AssignmentPriorityInsight> = {};
+    for (const insight of response.analysis?.assignments ?? []) {
+      if (!insight || typeof insight !== "object") {
+        continue;
+      }
+      const assignmentId = (insight as AssignmentPriorityInsight).id;
+      if (typeof assignmentId !== "number") {
+        continue;
+      }
+      insightsRecord[assignmentId] = {
+        id: assignmentId,
+        priority_score:
+          insight.priority_score === null || insight.priority_score === undefined
+            ? null
+            : Number.isNaN(Number(insight.priority_score))
+            ? null
+            : Number(insight.priority_score),
+        priority_label: insight.priority_label ?? null,
+        rationale: insight.rationale ?? null,
+        suggested_milestones: Array.isArray(insight.suggested_milestones)
+          ? insight.suggested_milestones
+              .filter((milestone) => milestone && typeof milestone === "object")
+              .map((milestone) => ({
+                name: String(milestone.name ?? "").trim(),
+                due_by:
+                  typeof milestone.due_by === "string" && milestone.due_by.trim().length
+                    ? milestone.due_by.trim()
+                    : null,
+                notes:
+                  typeof milestone.notes === "string" && milestone.notes.trim().length
+                    ? milestone.notes.trim()
+                    : null
+              }))
+              .filter((milestone) => milestone.name.length)
+          : []
+      };
+    }
+    assignmentInsights.value = insightsRecord;
+    analysisGeneratedAt.value = response.analysis?.generated_at ?? null;
+    analysisError.value = response.analysis_error ?? null;
 
     if (!courses.value.length) {
       selectedCourseIds.value = [];
@@ -63,6 +109,8 @@ const loadAssignments = async (force = false) => {
   } catch (err) {
     error.value =
       err instanceof Error ? err.message : "Failed to load assignments. Please try again.";
+    assignmentInsights.value = {};
+    analysisGeneratedAt.value = null;
   } finally {
     loading.value = false;
   }
@@ -82,10 +130,17 @@ const visibleCourses = computed(() => {
 
 const assignments = computed(() =>
   visibleCourses.value.flatMap((course) =>
-    course.assignments.map((assignment) => ({
-      ...assignment,
-      course_code: course.course_code
-    }))
+    course.assignments.map((assignment) => {
+      const insight = assignmentInsights.value[assignment.id];
+      return {
+        ...assignment,
+        course_code: course.course_code ?? assignment.course_code ?? null,
+        priority_score: insight?.priority_score ?? null,
+        priority_label: insight?.priority_label ?? null,
+        priority_rationale: insight?.rationale ?? null,
+        suggested_milestones: insight?.suggested_milestones ?? []
+      };
+    })
   )
 );
 
@@ -114,7 +169,19 @@ const assignmentsByDate = computed<CourseAssignmentsMap>(() => {
 const coursesWithAssignments = computed(() =>
   visibleCourses.value.map((course) => ({
     ...course,
-    assignments: [...course.assignments].sort((a, b) => a.due_at.localeCompare(b.due_at))
+    assignments: [...course.assignments]
+      .map((assignment) => {
+        const insight = assignmentInsights.value[assignment.id];
+        return {
+          ...assignment,
+          course_code: course.course_code ?? assignment.course_code ?? null,
+          priority_score: insight?.priority_score ?? null,
+          priority_label: insight?.priority_label ?? null,
+          priority_rationale: insight?.rationale ?? null,
+          suggested_milestones: insight?.suggested_milestones ?? []
+        };
+      })
+      .sort((a, b) => a.due_at.localeCompare(b.due_at))
   }))
 );
 
@@ -129,6 +196,8 @@ const useAssignments = () => ({
   hasCourseSelection,
   loading,
   error,
+  analysisGeneratedAt,
+  analysisError,
   assignments,
   assignmentsByDate,
   hasAssignments,

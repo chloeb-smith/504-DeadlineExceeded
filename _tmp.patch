@@ -1,0 +1,6 @@
+﻿*** Begin Patch
+*** Update File: assistant.py
+@@
+-            description = _clean_text(assignment.get("description"))
++            description = _clean_text(_sanitize_description(assignment.get("description")))
+*** End Patch
