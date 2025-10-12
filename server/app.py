@@ -12,7 +12,11 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 from requests import HTTPError
 
+<<<<<<< HEAD
 from assistant import GeminiConfigurationError, analyze_assignments, get_assignment_help
+=======
+from auth_service import AuthServiceError, login_user, register_user
+>>>>>>> main
 from canvas import canvas_get
 from store import add_item, list_items
 
@@ -270,6 +274,7 @@ def create_app():
     def hello():
         return jsonify({"message": "Hello from Flask API"})
 
+<<<<<<< HEAD
     @app.get("/")
     def home():
         return jsonify(
@@ -285,6 +290,57 @@ def create_app():
             "error": "Route not handled by Flask API.",
             "hint": "Use the Vite dev server for front-end routes.",
         }, 404
+=======
+    @app.post("/api/auth/register")
+    def auth_register():
+        payload = request.get_json(silent=True) or {}
+        email = (payload.get("email") or "").strip()
+        password = payload.get("password") or ""
+        display_name = payload.get("displayName")
+
+        if not email or not password:
+            return {"error": "invalid-argument", "message": "Email and password are required."}, 400
+
+        try:
+            profile = register_user(email=email, password=password, display_name=display_name)
+            tokens = login_user(email=email, password=password)
+        except AuthServiceError as exc:
+            status_map = {
+                "email-already-exists": 409,
+                "invalid-argument": 400,
+                "weak-password": 400,
+                "configuration-error": 500,
+                "network-error": 502,
+            }
+            status = status_map.get(exc.code, 400)
+            return {"error": exc.code, "message": str(exc)}, status
+
+        return jsonify({"profile": profile, "tokens": tokens}), 201
+
+    @app.post("/api/auth/login")
+    def auth_login():
+        payload = request.get_json(silent=True) or {}
+        email = (payload.get("email") or "").strip()
+        password = payload.get("password") or ""
+
+        if not email or not password:
+            return {"error": "invalid-argument", "message": "Email and password are required."}, 400
+
+        try:
+            tokens = login_user(email=email, password=password)
+        except AuthServiceError as exc:
+            status_map = {
+                "invalid-argument": 400,
+                "invalid-credentials": 401,
+                "access-denied": 403,
+                "configuration-error": 500,
+                "network-error": 502,
+            }
+            status = status_map.get(exc.code, 400)
+            return {"error": exc.code, "message": str(exc)}, status
+
+        return jsonify({"tokens": tokens}), 200
+>>>>>>> main
 
     @app.post("/api/items")
     def create_item():
@@ -638,5 +694,5 @@ def create_app():
 
 if __name__ == "__main__":
     app = create_app()
-    # port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=5173, debug=True)
+    port = int(os.getenv("PORT", "5050"))
+    app.run(host="0.0.0.0", port=port, debug=True)

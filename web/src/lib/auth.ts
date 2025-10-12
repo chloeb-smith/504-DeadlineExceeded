@@ -1,11 +1,4 @@
-import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  updateProfile,
-  onAuthStateChanged,
-  UserCredential
-} from "firebase/auth";
-import { auth, isFirebaseConfigured } from "./firebase";
+import { api } from "../api";
 
 type StoredUser = {
   name: string;
@@ -14,9 +7,19 @@ type StoredUser = {
   normalizedEmail: string;
 };
 
+export type AuthTokens = {
+  accessToken?: string;
+  idToken?: string;
+  refreshToken?: string;
+  expiresIn?: number;
+  tokenType?: string;
+  scope?: string;
+};
+
 export type AuthResult = {
   email: string;
   displayName?: string | null;
+  tokens?: AuthTokens;
 };
 
 const USERS_KEY = "deadline-exceeded-users";
@@ -87,43 +90,101 @@ export const getSessionUser = (): AuthResult | null => {
   }
 };
 
-const firebaseSignUp = async (name: string, email: string, password: string) => {
-  if (!auth) {
-    throw new Error("Firebase authentication is not initialized.");
+const decodeJwtPayload = (token?: string) => {
+  if (!token) return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const payload = parts[1];
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const decoded = atob(padded);
+    return JSON.parse(
+      decodeURIComponent(
+        decoded
+          .split("")
+          .map((c) => `%${c.charCodeAt(0).toString(16).padStart(2, "0")}`)
+          .join("")
+      )
+    );
+  } catch {
+    return null;
   }
+};
 
-  const cleanedName = cleanName(name);
-  const cleanedEmail = email.trim();
-  const cleanedPassword = cleanPassword(password);
+const normalizeTokens = (tokens: any): AuthTokens => ({
+  accessToken: tokens?.access_token,
+  idToken: tokens?.id_token,
+  refreshToken: tokens?.refresh_token,
+  expiresIn: typeof tokens?.expires_in === "number" ? tokens.expires_in : undefined,
+  tokenType: tokens?.token_type,
+  scope: tokens?.scope
+});
 
-  const credentials: UserCredential = await createUserWithEmailAndPassword(
-    auth,
-    cleanedEmail,
-    cleanedPassword
-  );
-  if (cleanedName) {
-    await updateProfile(credentials.user, { displayName: cleanedName });
+const extractErrorMessage = (error: unknown, fallback: string) => {
+  if (error && typeof error === "object" && "response" in error) {
+    const resp = (error as { response?: { data?: any; status?: number } }).response;
+    const message =
+      resp?.data?.message || resp?.data?.error || resp?.data?.error_description || null;
+    if (typeof message === "string" && message.trim()) {
+      return message;
+    }
   }
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return fallback;
+};
+
+const auth0SignUp = async (name: string, email: string, password: string): Promise<AuthResult> => {
+  let response;
+  try {
+    response = await api.post("/api/auth/register", {
+      email,
+      password,
+      displayName: name
+    });
+  } catch (error) {
+    throw new Error(
+      extractErrorMessage(
+        error,
+        "We couldn't create your account. Double-check your details and try again."
+      )
+    );
+  }
+  const { profile, tokens } = response.data ?? {};
+  const normalizedTokens = normalizeTokens(tokens);
+  const claims = decodeJwtPayload(normalizedTokens.idToken);
   const result: AuthResult = {
-    email: credentials.user.email ?? cleanedEmail,
-    displayName: credentials.user.displayName ?? cleanedName
+    email: profile?.email ?? claims?.email ?? email,
+    displayName: profile?.name ?? claims?.name ?? cleanName(name),
+    tokens: normalizedTokens
   };
   setSession(result);
   return result;
 };
 
-const firebaseSignIn = async (email: string, password: string) => {
-  if (!auth) {
-    throw new Error("Firebase authentication is not initialized.");
+const auth0SignIn = async (email: string, password: string): Promise<AuthResult> => {
+  let response;
+  try {
+    response = await api.post("/api/auth/login", {
+      email,
+      password
+    });
+  } catch (error) {
+    throw new Error(
+      extractErrorMessage(
+        error,
+        "We couldn't sign you in with those credentials. Please try again."
+      )
+    );
   }
-
-  const cleanedEmail = email.trim();
-  const cleanedPassword = cleanPassword(password);
-
-  const credentials = await signInWithEmailAndPassword(auth, cleanedEmail, cleanedPassword);
+  const normalizedTokens = normalizeTokens(response.data?.tokens);
+  const claims = decodeJwtPayload(normalizedTokens.idToken);
   const result: AuthResult = {
-    email: credentials.user.email ?? cleanedEmail,
-    displayName: credentials.user.displayName
+    email: claims?.email ?? email,
+    displayName: claims?.name ?? claims?.nickname ?? claims?.email ?? email,
+    tokens: normalizedTokens
   };
   setSession(result);
   return result;
@@ -168,46 +229,29 @@ const mockSignIn = async (email: string, password: string) => {
   return session;
 };
 
+const env = import.meta.env;
+const isAuth0Configured = Boolean(env.VITE_AUTH0_DOMAIN && env.VITE_AUTH0_CLIENT_ID);
+
 export const registerUser = async (
   name: string,
   email: string,
   password: string
 ): Promise<AuthResult> => {
-  if (isFirebaseConfigured) {
-    return firebaseSignUp(name, email, password);
+  if (isAuth0Configured) {
+    return auth0SignUp(name, email, password);
   }
   return mockSignUp(name, email, password);
 };
 
 export const loginUser = async (email: string, password: string): Promise<AuthResult> => {
-  if (isFirebaseConfigured) {
-    return firebaseSignIn(email, password);
+  if (isAuth0Configured) {
+    return auth0SignIn(email, password);
   }
   return mockSignIn(email, password);
 };
 
 export const signOutUser = async (): Promise<void> => {
   setSession(null);
-  if (auth && isFirebaseConfigured) {
-    try {
-      await auth.signOut();
-    } catch (error) {
-      console.warn("Failed to sign out from Firebase:", error);
-    }
-  }
 };
 
-export const usingMockAuth = !isFirebaseConfigured;
-
-if (auth && isFirebaseConfigured) {
-  onAuthStateChanged(auth, (user) => {
-    if (user) {
-      setSession({
-        email: user.email ?? "",
-        displayName: user.displayName ?? undefined
-      });
-    } else {
-      setSession(null);
-    }
-  });
-}
+export const usingMockAuth = !isAuth0Configured;
