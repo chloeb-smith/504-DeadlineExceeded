@@ -5,8 +5,9 @@ import type { CanvasAssignment } from "../api";
 import useAuth from "../stores/authStore";
 import useAssignments from "../stores/assignmentsStore";
 import useAssistant from "../stores/assistantStore";
+import AppHeader from "../components/AppHeader.vue";
 const router = useRouter();
-const { currentUser, displayName, signOut } = useAuth();
+const { currentUser, displayName } = useAuth();
 const assignmentsStore = useAssignments();
 const {
   loadAssignments,
@@ -32,10 +33,6 @@ const welcomeLabel = computed(() => {
   if (!currentUser.value) return "Guest";
   return displayName.value ?? currentUser.value.email;
 });
-const handleSignOut = async () => {
-  await signOut();
-  router.push("/");
-};
 const topAssignments = computed(() =>
   [...assignments.value]
     .sort((a, b) => a.due_at.localeCompare(b.due_at))
@@ -248,35 +245,7 @@ const requestAssistantHelp = async (assignment: CanvasAssignment) => {
 </script>
 <template>
   <div class="min-h-screen bg-background">
-    <header
-      class="border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60"
-    >
-      <div class="container mx-auto px-4 py-4 flex items-center justify-between gap-6">
-        <RouterLink to="/" class="flex items-center gap-2 font-semibold text-lg text-foreground">
-          <div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-            <span class="text-primary-foreground font-bold">5</span>
-          </div>
-          <span>504: Deadline Exceeded</span>
-        </RouterLink>
-        <nav class="flex items-center gap-4 text-sm text-muted-foreground">
-          <RouterLink to="/dashboard" class="text-foreground font-medium">Dashboard</RouterLink>
-          <RouterLink to="/calendar" class="hover:text-foreground">Calendar</RouterLink>
-          <RouterLink to="/assistant" class="hover:text-foreground">Assistant</RouterLink>
-        </nav>
-        <div class="flex items-center gap-3">
-          <span class="text-sm text-muted-foreground hidden sm:inline">
-            Signed in as <span class="text-foreground font-medium">{{ welcomeLabel }}</span>
-          </span>
-          <button
-            type="button"
-            @click="handleSignOut"
-            class="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors text-sm font-medium"
-          >
-            Sign Out
-          </button>
-        </div>
-      </div>
-    </header>
+    <AppHeader />
     <main class="container mx-auto px-4 py-16 space-y-10">
       <div class="space-y-2">
         <h1 class="text-4xl font-bold text-foreground">Welcome back, {{ welcomeLabel }}!</h1>

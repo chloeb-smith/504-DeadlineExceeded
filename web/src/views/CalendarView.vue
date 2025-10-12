@@ -13,9 +13,8 @@ import {
   format,
   parseISO
 } from "date-fns";
-import { RouterLink } from "vue-router";
 import useAssignments from "../stores/assignmentsStore";
-import useAuth from "../stores/authStore";
+import AppHeader from "../components/AppHeader.vue";
 
 const assignmentsStore = useAssignments();
 const {
@@ -32,8 +31,6 @@ const {
   selectAllCourses,
   clearCourseSelection
 } = assignmentsStore;
-const { isAuthenticated, displayName, signOut } = useAuth();
-
 const currentMonth = ref(startOfMonth(new Date()));
 
 onMounted(() => {
@@ -103,8 +100,6 @@ const courseColorMap = computed<Record<number, string>>(() => {
 });
 
 const hasAssignments = computed(() => coursesWithAssignments.value.length > 0);
-const welcomeLabel = computed(() => displayName.value || "");
-
 const courseSelectionOptions = computed(() =>
   courses.value.map((course) => ({
     id: course.id,
@@ -142,57 +137,11 @@ watch(hasCourseSelection, (value) => {
   }
 });
 
-const handleSignOut = async () => {
-  await signOut();
-};
 </script>
 
 <template>
   <div class="min-h-screen bg-background">
-    <header
-      class="border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60"
-    >
-      <div class="container mx-auto px-4 py-4 flex items-center justify-between">
-        <RouterLink to="/" class="flex items-center gap-2 font-semibold text-lg text-foreground">
-          <div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-            <span class="text-primary-foreground font-bold">5</span>
-          </div>
-          <span>504: Deadline Exceeded</span>
-        </RouterLink>
-        <nav class="flex items-center gap-4 text-sm">
-          <RouterLink to="/dashboard" class="text-muted-foreground hover:text-foreground">
-            Dashboard
-          </RouterLink>
-          <RouterLink to="/calendar" class="text-foreground font-medium">Calendar</RouterLink>
-          <RouterLink to="/assistant" class="text-muted-foreground hover:text-foreground">
-            Assistant
-          </RouterLink>
-          <template v-if="!isAuthenticated">
-            <RouterLink to="/signin" class="text-muted-foreground hover:text-foreground">
-              Sign In
-            </RouterLink>
-            <RouterLink
-              to="/signup"
-              class="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors font-medium"
-            >
-              Get Started
-            </RouterLink>
-          </template>
-          <template v-else>
-            <span class="hidden sm:inline text-muted-foreground">
-              Hi, <span class="text-foreground font-medium">{{ welcomeLabel }}</span>
-            </span>
-            <button
-              type="button"
-              class="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors font-medium"
-              @click="handleSignOut"
-            >
-              Sign Out
-            </button>
-          </template>
-        </nav>
-      </div>
-    </header>
+    <AppHeader />
 
     <main class="container mx-auto px-4 py-12 space-y-10">
       <section class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

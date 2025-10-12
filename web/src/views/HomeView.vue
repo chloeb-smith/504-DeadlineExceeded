@@ -1,80 +1,17 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { useRouter, RouterLink } from "vue-router";
+import { RouterLink } from "vue-router";
+import AppHeader from "../components/AppHeader.vue";
 import useAuth from "../stores/authStore";
 
-const router = useRouter();
-const { isAuthenticated, displayName, signOut } = useAuth();
+const { isAuthenticated } = useAuth();
 
 const showAuthButtons = computed(() => !isAuthenticated.value);
-const welcomeLabel = computed(() => displayName.value || "");
-
-const handleSignOut = async () => {
-  await signOut();
-  router.push("/");
-};
 </script>
 
 <template>
   <div class="min-h-screen bg-background">
-    <header
-      class="border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60"
-    >
-      <div class="container mx-auto px-4 py-4 flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-            <span class="text-primary-foreground font-bold">5</span>
-          </div>
-          <span class="font-semibold text-lg text-foreground">504: Deadline Exceeded</span>
-        </div>
-        <nav class="flex items-center gap-4">
-          <RouterLink
-            to="/calendar"
-            class="text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Calendar
-          </RouterLink>
-          <RouterLink
-            to="/assistant"
-            class="text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Assistant
-          </RouterLink>
-          <template v-if="showAuthButtons">
-            <RouterLink
-              to="/signin"
-              class="text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Sign In
-            </RouterLink>
-            <RouterLink
-              to="/signup"
-              class="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium"
-            >
-              Get Started
-            </RouterLink>
-          </template>
-          <template v-else>
-            <span class="hidden sm:inline text-sm text-muted-foreground">
-              Hi, <span class="text-foreground font-medium">{{ welcomeLabel }}</span>
-            </span>
-            <RouterLink
-              to="/dashboard"
-              class="text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Dashboard
-            </RouterLink>
-            <button
-              type="button"
-              @click="handleSignOut"
-              class="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors text-sm font-medium"
-            >
-              Sign Out
-            </button>
-          </template>
-        </nav>
-      </div>
-    </header>
+    <AppHeader />
 
     <main class="container mx-auto px-4 py-20 md:py-32">
       <div class="max-w-3xl mx-auto text-center space-y-8">
@@ -100,12 +37,6 @@ const handleSignOut = async () => {
           >
             Go to Dashboard
           </RouterLink>
-          <a
-            href="#learn-more"
-            class="px-8 py-4 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors text-lg font-medium"
-          >
-            Learn More
-          </a>
         </div>
       </div>
       <section

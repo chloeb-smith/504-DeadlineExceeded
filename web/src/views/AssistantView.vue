@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { RouterLink } from "vue-router";
 import useAssignments from "../stores/assignmentsStore";
 import useAssistant from "../stores/assistantStore";
+import AppHeader from "../components/AppHeader.vue";
 
 const assignmentsStore = useAssignments();
 const assistantStore = useAssistant();
@@ -178,23 +178,7 @@ const totalTokens = computed(() => usage.value?.total_tokens ?? 0);
 
 <template>
   <div class="min-h-screen bg-background">
-    <header
-      class="border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60"
-    >
-      <div class="container mx-auto px-4 py-4 flex items-center justify-between gap-6">
-        <RouterLink to="/" class="flex items-center gap-2 font-semibold text-lg text-foreground">
-          <div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-            <span class="text-primary-foreground font-bold">5</span>
-          </div>
-          <span>504: Deadline Exceeded</span>
-        </RouterLink>
-        <nav class="flex items-center gap-4 text-sm text-muted-foreground">
-          <RouterLink to="/dashboard" class="hover:text-foreground">Dashboard</RouterLink>
-          <RouterLink to="/calendar" class="hover:text-foreground">Calendar</RouterLink>
-          <RouterLink to="/assistant" class="text-foreground font-medium">Assistant</RouterLink>
-        </nav>
-      </div>
-    </header>
+    <AppHeader />
 
     <main class="container mx-auto px-4 py-10 space-y-8">
       <section class="space-y-2">
