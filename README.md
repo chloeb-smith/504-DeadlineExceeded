@@ -46,7 +46,7 @@ Currently you need to generate and input your own Canvas API key into the system
 
 ### Setup Instructions:
 - git clone <repo_url> and cd 504-DeadlineExceeded.
-- Create .env files (server/.env, web/.env) based on provided samples; add keys for Canvas, Auth0, Gemini, Firebase service account, etc.
+- Create .env file (in "doc" folder) based on provided samples; add keys for Canvas, Auth0, Gemini, Firebase service account, etc.
 - Backend: cd server, python3 -m venv .venv && source .venv/bin/activate, pip install -r requirements.txt.
 - Start API: python app.py (reads .env, listens on port 5050).
 - Frontend: cd ../web, npm install, create web/.env with Vite vars, npm run dev (defaults to port 5173).
