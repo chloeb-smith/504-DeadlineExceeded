@@ -673,5 +673,14 @@ def create_app():
 
 if __name__ == "__main__":
     app = create_app()
-    port = int(os.getenv("PORT", "5050"))
+    port_value = (
+        os.getenv("BACKEND_PORT")
+        or os.getenv("SERVER_PORT")
+        or os.getenv("PORT")
+        or "5050"
+    )
+    try:
+        port = int(port_value)
+    except (TypeError, ValueError):
+        port = 5050
     app.run(host="0.0.0.0", port=port, debug=True)
