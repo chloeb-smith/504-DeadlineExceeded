@@ -1,0 +1,23 @@
+# server/.env
+FLASK_ENV=development
+FLASK_SECRET_KEY=dev-change-me
+PORT=5050
+CORS_ORIGIN=http://localhost:5173
+
+# Canvas API credentials
+CANVAS_BASE_URL=https://yourinstitution.instructure.com
+CANVAS_TOKEN=12345~replace_with_real_canvas_token
+
+# Dev fallback user
+DEV_UID=dev-user-1
+
+# Auth0 (Regular Web App)
+AUTH0_DOMAIN=your-tenant.us.auth0.com
+AUTH0_CLIENT_ID=your_backend_client_id
+AUTH0_CLIENT_SECRET=your_backend_client_secret
+AUTH0_AUDIENCE=https://your-tenant.us.auth0.com/api/v2/
+AUTH0_CONNECTION=Username-Password-Authentication
+
+# Gemini configuration
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL_NAME=gemini-2.0-flash
