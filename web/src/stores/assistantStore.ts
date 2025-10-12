@@ -1,6 +1,7 @@
 import { computed, ref } from "vue";
 import {
   getAssignmentHelp,
+  type AssistantContext,
   type AssistantMessage,
   type AssistantRequestPayload,
   type AssistantResponsePayload
@@ -38,11 +39,14 @@ const normalizeKeywords = (keywords: string[]) =>
     )
   ).slice(0, 25);
 
-const historyForRequest = computed<AssistantMessage[]>(() =>
-  messages.value.map((message) => ({
+const mapMessagesToHistory = (items: ChatMessage[]): AssistantMessage[] =>
+  items.map((message) => ({
     role: message.role,
     content: message.content
-  }))
+  }));
+
+const historyForRequest = computed<AssistantMessage[]>(() =>
+  mapMessagesToHistory(messages.value)
 );
 
 const setSelectedKeywords = (keywords: string[]) => {
@@ -76,9 +80,52 @@ const resetConversation = () => {
   usage.value = null;
   error.value = null;
   lastModel.value = null;
+  loading.value = false;
 };
 
-const sendMessage = async (question: string) => {
+const sanitizeContext = (context?: AssistantContext | null): AssistantRequestPayload["context"] => {
+  if (!context?.courses?.length) {
+    return undefined;
+  }
+
+  const clampDescription = (value: unknown): string | null => {
+    if (typeof value !== "string") return null;
+    const normalized = value.trim();
+    if (!normalized) return null;
+    return normalized.length > 360 ? `${normalized.slice(0, 360).trim()}…` : normalized;
+  };
+
+  const courses = context.courses
+      .filter((course) => course && typeof course === "object")
+      .slice(0, 5)
+      .map((course) => ({
+        id: course.id,
+        name: course.name,
+        course_code: course.course_code ?? null,
+        assignments: (course.assignments ?? [])
+          .filter((assignment) => assignment && typeof assignment === "object")
+          .slice(0, 6)
+          .map((assignment) => ({
+            id: assignment.id,
+            name: assignment.name,
+            due_at: assignment.due_at ?? null,
+            due_at_display: assignment.due_at_display ?? null,
+            course_name: assignment.course_name ?? null,
+            course_code: assignment.course_code ?? null,
+            points_possible: assignment.points_possible ?? null,
+            description: clampDescription(assignment.description ?? null)
+          }))
+      }))
+      .filter((course) => course.assignments.length || course.name?.trim());
+
+  if (!courses.length) {
+    return undefined;
+  }
+
+  return { courses };
+};
+
+const sendMessage = async (question: string, context?: AssistantContext | null) => {
   const trimmedQuestion = question.trim();
   if (!trimmedQuestion) {
     error.value = "Please enter a question.";
@@ -95,6 +142,7 @@ const sendMessage = async (question: string) => {
     createdAt: now
   };
 
+  const history = mapMessagesToHistory(messages.value);
   messages.value = [...messages.value, userMessage];
   error.value = null;
   loading.value = true;
@@ -103,7 +151,8 @@ const sendMessage = async (question: string) => {
     const payload: AssistantRequestPayload = {
       keywords,
       question: trimmedQuestion,
-      history: historyForRequest.value
+      history,
+      context: sanitizeContext(context)
     };
     const response = await getAssignmentHelp(payload);
     const assistantMessage: ChatMessage = {

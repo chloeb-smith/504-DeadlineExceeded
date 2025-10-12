@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { useRouter, RouterLink } from "vue-router";
+import type { CanvasAssignment } from "../api";
 import useAuth from "../stores/authStore";
 import useAssignments from "../stores/assignmentsStore";
 
@@ -87,6 +88,44 @@ watch(hasCourseSelection, (value) => {
   if (!value && totalCourses.value > 0) {
     showCourseFilter.value = true;
   }
+});
+
+const expandedAssignments = ref<Set<number>>(new Set());
+const MAX_ASSIGNMENT_DESCRIPTION = 800;
+
+const plainTextDescription = (raw: string | null | undefined): string =>
+  (raw ?? "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const describeAssignment = (assignment: CanvasAssignment): string => {
+  const description = plainTextDescription(assignment.description);
+  if (!description) return "";
+  if (description.length <= MAX_ASSIGNMENT_DESCRIPTION) {
+    return description;
+  }
+  return `${description.slice(0, MAX_ASSIGNMENT_DESCRIPTION).trim()}…`;
+};
+
+const hasAssignmentDescription = (assignment: CanvasAssignment) =>
+  describeAssignment(assignment).length > 0;
+
+const isAssignmentExpanded = (assignmentId: number) =>
+  expandedAssignments.value.has(assignmentId);
+
+const toggleAssignmentDetails = (assignmentId: number) => {
+  const updated = new Set(expandedAssignments.value);
+  if (updated.has(assignmentId)) {
+    updated.delete(assignmentId);
+  } else {
+    updated.add(assignmentId);
+  }
+  expandedAssignments.value = updated;
+};
+
+watch(assignments, () => {
+  expandedAssignments.value = new Set();
 });
 </script>
 
@@ -285,16 +324,34 @@ watch(hasCourseSelection, (value) => {
               class="border border-border rounded-lg px-4 py-3 bg-background/60 space-y-2"
             >
               <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                <div>
+                <div class="flex-1">
                   <p class="text-foreground font-medium">{{ assignment.name }}</p>
                   <p class="text-xs text-muted-foreground">
                     {{ assignment.course_name }}
                   </p>
                 </div>
-                <span class="text-xs text-muted-foreground whitespace-nowrap">
-                  {{ assignment.due_at_display }}
-                </span>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-muted-foreground whitespace-nowrap">
+                    {{ assignment.due_at_display }}
+                  </span>
+                  <button
+                    v-if="hasAssignmentDescription(assignment)"
+                    type="button"
+                    class="text-xs font-medium text-primary hover:underline underline-offset-4"
+                    @click="toggleAssignmentDetails(assignment.id)"
+                  >
+                    {{ isAssignmentExpanded(assignment.id) ? "Hide details" : "Show details" }}
+                  </button>
+                </div>
               </div>
+              <Transition name="fade">
+                <div
+                  v-if="isAssignmentExpanded(assignment.id) && hasAssignmentDescription(assignment)"
+                  class="text-xs text-muted-foreground bg-secondary/20 border border-border/60 rounded-lg px-3 py-2 leading-relaxed"
+                >
+                  {{ describeAssignment(assignment) }}
+                </div>
+              </Transition>
               <a
                 v-if="assignment.html_url"
                 :href="assignment.html_url"

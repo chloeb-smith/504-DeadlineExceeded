@@ -12,7 +12,8 @@ const {
   assignments,
   assignmentsByDate,
   loading: assignmentsLoading,
-  error: assignmentsError
+  error: assignmentsError,
+  coursesWithAssignments
 } = assignmentsStore;
 
 const {
@@ -100,6 +101,54 @@ const suggestedKeywords = computed(() => {
     .map(([token]) => token);
 });
 
+const MAX_CONTEXT_COURSES = 4;
+const MAX_CONTEXT_ASSIGNMENTS = 6;
+const MAX_CONTEXT_DESCRIPTION = 360;
+
+const stripHtml = (value: string | null | undefined) =>
+  (value ?? "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const summarizeText = (value: string, limit = MAX_CONTEXT_DESCRIPTION) => {
+  if (!value) return "";
+  return value.length > limit ? `${value.slice(0, limit).trim()}…` : value;
+};
+
+const assistantContext = computed(() => {
+  const courses = coursesWithAssignments.value
+    .slice(0, MAX_CONTEXT_COURSES)
+    .map((course) => {
+      const assignmentsList = (course.assignments ?? [])
+        .slice(0, MAX_CONTEXT_ASSIGNMENTS)
+        .map((assignment) => {
+          const summary = summarizeText(stripHtml(assignment.description));
+          return {
+            id: assignment.id,
+            name: assignment.name ?? "",
+            due_at: assignment.due_at ?? null,
+            due_at_display: assignment.due_at_display ?? null,
+            course_name: assignment.course_name ?? course.name ?? "",
+            course_code: assignment.course_code ?? course.course_code ?? null,
+            points_possible: assignment.points_possible ?? null,
+            description: summary || null
+          };
+        })
+        .filter((assignment) => assignment.name.trim().length);
+
+      return {
+        id: course.id,
+        name: course.name ?? "",
+        course_code: course.course_code ?? null,
+        assignments: assignmentsList
+      };
+    })
+    .filter((course) => course.assignments.length);
+
+  return courses.length ? { courses } : null;
+});
+
 const sortedMessages = computed(() =>
   [...messages.value].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
 );
@@ -116,10 +165,15 @@ const handleAddKeyword = () => {
 
 const handleSubmit = async () => {
   if (!question.value.trim() || assistantLoading.value) return;
-  await sendMessage(question.value);
+  await sendMessage(question.value, assistantContext.value);
   if (!assistantError.value) {
     question.value = "";
   }
+};
+
+const handleNewChat = () => {
+  resetConversation();
+  question.value = "";
 };
 
 const totalTokens = computed(() => usage.value?.total_tokens ?? 0);
@@ -165,7 +219,7 @@ const totalTokens = computed(() => usage.value?.total_tokens ?? 0);
                 v-if="hasConversation"
                 type="button"
                 class="ml-2 text-xs font-medium underline underline-offset-4"
-                @click="resetConversation"
+                @click="handleNewChat"
               >
                 New chat
               </button>

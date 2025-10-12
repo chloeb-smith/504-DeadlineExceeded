@@ -43,7 +43,7 @@ const loadAssignments = async (force = false) => {
   loading.value = true;
   error.value = null;
   try {
-    const response: CanvasAssignmentsResponse = await getCanvasAssignments();
+    const response: CanvasAssignmentsResponse = await getCanvasAssignments(force);
     const previousIds = new Set(courses.value.map((course) => course.id));
     courses.value = response.courses ?? [];
     fetchedAt.value = response.fetched_at ?? null;

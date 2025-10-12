@@ -1,6 +1,9 @@
 import calendar
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from threading import Lock
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from flask import Flask, jsonify, request
@@ -15,6 +18,10 @@ from store import add_item, list_items
 load_dotenv()
 
 DEV_UID = os.getenv("DEV_UID", "dev-user-1")
+CANVAS_CACHE_SECONDS = max(0, int(os.getenv("CANVAS_CACHE_SECONDS", "120")))
+CANVAS_MAX_WORKERS = max(1, int(os.getenv("CANVAS_MAX_WORKERS", "4")))
+_assignments_cache: Dict[str, Dict[str, Any]] = {}
+_assignments_cache_lock = Lock()
 
 
 def _get_canvas_config():
@@ -44,9 +51,49 @@ def _format_due_display(due_at: datetime) -> str:
         time_str = time_str[1:]
     tz = local_dt.tzname() or ""
     if tz:
-        return f"{date_str} • {time_str} {tz}"
-    return f"{date_str} • {time_str}"
+        return f"{date_str} - {time_str} {tz}"
+    return f"{date_str} - {time_str}"
 
+
+
+def _assignments_cache_key(token: str, window_start: datetime, window_end: datetime) -> str:
+    return f"{token}:{window_start.date().isoformat()}:{window_end.date().isoformat()}"
+
+
+def _get_cached_assignments(cache_key: str) -> Optional[Dict[str, Any]]:
+    if CANVAS_CACHE_SECONDS <= 0:
+        return None
+    now_ts = time.time()
+    with _assignments_cache_lock:
+        entry = _assignments_cache.get(cache_key)
+        if not entry:
+            return None
+        if now_ts - entry["timestamp"] > CANVAS_CACHE_SECONDS:
+            _assignments_cache.pop(cache_key, None)
+            return None
+        return entry["payload"]
+
+
+def _store_assignments_cache(cache_key: str, payload: Dict[str, Any]) -> None:
+    if CANVAS_CACHE_SECONDS <= 0:
+        return
+    with _assignments_cache_lock:
+        _assignments_cache[cache_key] = {"timestamp": time.time(), "payload": payload}
+        if len(_assignments_cache) > 10:
+            oldest_key = min(_assignments_cache, key=lambda key: _assignments_cache[key]["timestamp"])
+            if oldest_key != cache_key:
+                _assignments_cache.pop(oldest_key, None)
+
+
+def _get_past_due_grace_days() -> int:
+    raw = os.getenv("CANVAS_PAST_DUE_GRACE_DAYS")
+    if not raw:
+        return 2
+    try:
+        value = int(raw)
+        return value if value >= 0 else 2
+    except ValueError:
+        return 2
 
 def _get_upcoming_window_days() -> int:
     raw = os.getenv("CANVAS_UPCOMING_WINDOW_DAYS")
@@ -266,7 +313,16 @@ def create_app():
 
         now_utc = datetime.now(timezone.utc)
         window_start, window_end, lookback_days, lookahead_days = _assignment_window(now_utc)
+        past_due_grace_days = _get_past_due_grace_days()
+        past_due_cutoff = now_utc - timedelta(days=past_due_grace_days)
 
+        force_refresh = str(request.args.get("force", "")).lower() in {"1", "true", "yes", "refresh"}
+        cache_key = _assignments_cache_key(token, window_start, window_end) if token else None
+        if cache_key and not force_refresh:
+            cached_payload = _get_cached_assignments(cache_key)
+            if cached_payload is not None:
+                return jsonify(cached_payload)
+    
         try:
             courses = canvas_get(
                 base,
@@ -285,15 +341,34 @@ def create_app():
             message = "Canvas API request failed while loading courses"
             return {"error": message, "status": status}, status
 
-        response_courses: List[Dict[str, Any]] = []
-        warnings: List[Dict[str, Any]] = []
+        raw_limit = os.getenv("CANVAS_MAX_ACTIVE_COURSES", "").strip()
+        course_limit = 0
+        if raw_limit:
+            try:
+                parsed = int(raw_limit)
+                if parsed > 0:
+                    course_limit = parsed
+            except ValueError:
+                course_limit = 0
 
+        eligible_courses: List[Dict[str, Any]] = []
         for course in courses:
             course_id = course.get("id")
             if not course_id:
                 continue
             if course.get("workflow_state") == "deleted":
                 continue
+            eligible_courses.append(course)
+            if course_limit and len(eligible_courses) >= course_limit:
+                break
+
+        response_courses: List[Dict[str, Any]] = []
+        warnings: List[Dict[str, Any]] = []
+
+        def load_course(course: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+            course_id = course.get("id")
+            if not course_id:
+                return None, None
             try:
                 assignments = canvas_get(
                     base,
@@ -306,17 +381,14 @@ def create_app():
                     },
                     paginate=True,
                 )
-            except HTTPError as exc:
+            except HTTPError as exc:  # Recovered later so other courses still load
                 status = exc.response.status_code if exc.response is not None else 502
-                warnings.append(
-                    {
-                        "course_id": course_id,
-                        "status": status,
-                        "message": f"Failed to load assignments for course {course_id}",
-                    }
-                )
-                continue
-
+                return None, {
+                    "course_id": course_id,
+                    "status": status,
+                    "message": f"Failed to load assignments for course {course_id}",
+                }
+    
             normalized: List[Dict[str, Any]] = []
             for assignment in assignments:
                 due_at_str = assignment.get("due_at")
@@ -324,6 +396,8 @@ def create_app():
                 if due_at is None:
                     continue
                 if due_at < window_start or due_at > window_end:
+                    continue
+                if due_at < past_due_cutoff:
                     continue
                 normalized.append(
                     {
@@ -338,10 +412,10 @@ def create_app():
                         "course_name": course.get("name"),
                     }
                 )
-
+    
             normalized.sort(key=lambda item: item["due_at"])
             earliest_due_at = normalized[0]["due_at"] if normalized else None
-            response_courses.append(
+            return (
                 {
                     "id": course_id,
                     "name": course.get("name"),
@@ -349,9 +423,36 @@ def create_app():
                     "assignments": normalized,
                     "assignments_in_window": len(normalized),
                     "earliest_due_at": earliest_due_at,
-                }
+                },
+                None,
             )
-
+    
+        if eligible_courses:
+            max_workers = min(CANVAS_MAX_WORKERS, len(eligible_courses))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {executor.submit(load_course, course): course for course in eligible_courses}
+                for future in as_completed(future_map):
+                    try:
+                        course_payload, warning = future.result()
+                    except Exception as exc:  # pragma: no cover - defensive
+                        course = future_map[future]
+                        warnings.append(
+                            {
+                                "course_id": course.get("id"),
+                                "status": 500,
+                                "message": f"Unexpected error loading assignments for course {course.get('id')}: {exc}",
+                            }
+                        )
+                        continue
+                    if warning:
+                        warnings.append(warning)
+                    if course_payload:
+                        response_courses.append(course_payload)
+        else:
+            response_courses = []
+    
+        response_courses.sort(key=lambda item: item.get("earliest_due_at") or "")
+    
         payload: Dict[str, Any] = {
             "fetched_at": now_utc.isoformat(),
             "window": {
@@ -364,6 +465,10 @@ def create_app():
         }
         if warnings:
             payload["warnings"] = warnings
+    
+        if cache_key:
+            _store_assignments_cache(cache_key, payload)
+    
         return jsonify(payload)
 
     @app.post("/api/assistant/help")
@@ -398,8 +503,17 @@ def create_app():
                 continue
             safe_history.append({"role": role, "content": content})
 
+        context_payload = payload.get("context")
+        if context_payload is not None and not isinstance(context_payload, dict):
+            return {"error": "context must be an object."}, 400
+
         try:
-            result = get_assignment_help(keywords, question, history=safe_history)
+            result = get_assignment_help(
+                keywords,
+                question,
+                history=safe_history,
+                context=context_payload,
+            )
         except ValueError:
             return {"error": "A question is required to generate guidance."}, 400
         except GeminiConfigurationError as exc:
