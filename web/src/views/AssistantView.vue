@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import useAssignments from "../stores/assignmentsStore";
 import useAssistant from "../stores/assistantStore";
 import AppHeader from "../components/AppHeader.vue";
@@ -33,6 +33,7 @@ const {
 
 const question = ref("");
 const keywordInput = ref("");
+const messageContainer = ref<HTMLElement | null>(null);
 
 onMounted(() => {
   loadAssignments();
@@ -163,17 +164,44 @@ const handleAddKeyword = () => {
   keywordInput.value = "";
 };
 
+const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
+  nextTick(() => {
+    const el = messageContainer.value;
+    if (!el) return;
+    el.scrollTo({
+      top: el.scrollHeight,
+      behavior
+    });
+  });
+};
+
 const handleSubmit = async () => {
   if (!question.value.trim() || assistantLoading.value) return;
   await sendMessage(question.value, assistantContext.value);
+  question.value = "";
+  scrollToBottom();
 };
 
 const handleNewChat = () => {
   resetConversation();
   question.value = "";
+  scrollToBottom("auto");
 };
 
 const totalTokens = computed(() => usage.value?.total_tokens ?? 0);
+
+watch(
+  () => sortedMessages.value.length,
+  () => {
+    scrollToBottom(sortedMessages.value.length > 3 ? "smooth" : "auto");
+  }
+);
+
+watch(assistantLoading, (isLoading) => {
+  if (isLoading) {
+    scrollToBottom("smooth");
+  }
+});
 </script>
 
 <template>
@@ -206,7 +234,10 @@ const totalTokens = computed(() => usage.value?.total_tokens ?? 0);
               </button>
             </div>
           </div>
-          <div class="flex-1 px-6 py-4 space-y-4 max-h-[520px] overflow-y-auto">
+          <div
+            ref="messageContainer"
+            class="flex-1 px-6 py-4 space-y-4 max-h-[520px] overflow-y-auto"
+          >
             <div
               v-if="assistantError"
               class="border border-destructive/20 bg-destructive/10 text-destructive text-sm rounded-lg px-4 py-3"
@@ -257,6 +288,20 @@ const totalTokens = computed(() => usage.value?.total_tokens ?? 0);
               <span class="text-xs text-muted-foreground">
                 {{ new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }}
               </span>
+            </div>
+            <div
+              v-if="assistantLoading"
+              class="flex items-start gap-2"
+            >
+              <div class="w-2 h-2 rounded-full bg-primary/60 animate-bounce [animation-delay:-0.2s]" />
+              <div class="max-w-[80%] rounded-lg px-4 py-3 text-sm bg-muted border border-border/60 shadow-sm">
+                <p class="font-semibold text-xs uppercase tracking-wide mb-2">Assistant</p>
+                <div class="flex items-center gap-1 text-muted-foreground">
+                  <span class="w-2 h-2 rounded-full bg-primary/70 animate-bounce" />
+                  <span class="w-2 h-2 rounded-full bg-primary/50 animate-bounce [animation-delay:0.15s]" />
+                  <span class="w-2 h-2 rounded-full bg-primary/30 animate-bounce [animation-delay:0.3s]" />
+                </div>
+              </div>
             </div>
           </div>
           <form

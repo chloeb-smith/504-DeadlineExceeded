@@ -616,9 +616,18 @@ def create_app():
         history = payload.get("history") or []
 
         if not question:
-            return {"error": "A question is required to generate guidance."}, 400
+            if keywords or context_payload:
+                question = "Provide detailed assignment planning guidance based on the supplied keywords and context."
+                app.logger.info(
+                    "assistant_help received empty question; using fallback prompt. payload=%s",
+                    payload,
+                )
+            else:
+                app.logger.warning("assistant_help rejected empty question payload: %s", payload)
+                return {"error": "A question is required to generate guidance."}, 400
 
         if not isinstance(raw_keywords, list):
+            app.logger.warning("assistant_help rejecting keywords=%s (not list)", raw_keywords)
             return {"error": "keywords must be an array of strings."}, 400
         keywords = []
         for keyword in raw_keywords[:25]:
@@ -628,6 +637,7 @@ def create_app():
                     keywords.append(cleaned)
 
         if history and not isinstance(history, list):
+            app.logger.warning("assistant_help rejecting history=%s (not list)", history)
             return {"error": "history must be an array of messages."}, 400
 
         safe_history = []
@@ -642,7 +652,18 @@ def create_app():
 
         context_payload = payload.get("context")
         if context_payload is not None and not isinstance(context_payload, dict):
+            app.logger.warning(
+                "assistant_help rejecting context payload type=%s", type(context_payload).__name__
+            )
             return {"error": "context must be an object."}, 400
+
+        app.logger.debug(
+            "assistant_help dispatch question='%s' keywords=%s context_courses=%s history_len=%s",
+            question,
+            keywords,
+            len((context_payload or {}).get("courses", [])) if isinstance(context_payload, dict) else "n/a",
+            len(safe_history),
+        )
 
         try:
             result = get_assignment_help(
@@ -651,8 +672,6 @@ def create_app():
                 history=safe_history,
                 context=context_payload,
             )
-        except ValueError:
-            return {"error": "A question is required to generate guidance."}, 400
         except GeminiConfigurationError as exc:
             return {"error": str(exc)}, 500
         except RuntimeError as exc:

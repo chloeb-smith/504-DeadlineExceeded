@@ -154,17 +154,28 @@ const sanitizeContext = (context?: AssistantContext | null): AssistantRequestPay
 
 const sendMessage = async (question: string, context?: AssistantContext | null) => {
   const trimmedQuestion = question.trim();
-  if (!trimmedQuestion) {
+  const keywords = normalizeKeywords(selectedKeywords.value);
+  let finalQuestion = trimmedQuestion;
+
+  if (!finalQuestion && (keywords.length || context?.courses?.length)) {
+    finalQuestion =
+      keywords.length && context?.courses?.length
+        ? "Please review the provided assignments and keywords, then deliver a comprehensive plan."
+        : keywords.length
+          ? "Please provide detailed study guidance using the supplied keywords."
+          : "Please provide a detailed action plan for the provided assignment context.";
+  }
+
+  if (!finalQuestion) {
     error.value = "Please enter a question.";
     return;
   }
 
-  const keywords = normalizeKeywords(selectedKeywords.value);
   const now = new Date().toISOString();
   const userMessage: ChatMessage = {
     id: makeId(),
     role: "user",
-    content: trimmedQuestion,
+    content: finalQuestion,
     keywords,
     createdAt: now
   };
@@ -177,10 +188,11 @@ const sendMessage = async (question: string, context?: AssistantContext | null) 
   try {
     const payload: AssistantRequestPayload = {
       keywords,
-      question: trimmedQuestion,
+      question: finalQuestion,
       history,
       context: sanitizeContext(context)
     };
+    console.debug("assistantStore.sendMessage payload", payload);
     const response = await getAssignmentHelp(payload);
     const assistantMessage: ChatMessage = {
       id: makeId(),

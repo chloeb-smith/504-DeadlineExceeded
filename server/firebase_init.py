@@ -20,7 +20,12 @@ def _build_credentials():
 
     path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
     if path:
-        return credentials.Certificate(path)
+        expanded = os.path.expanduser(path)
+        if not os.path.isabs(expanded):
+            candidate = os.path.join(os.path.dirname(__file__), expanded)
+            if os.path.exists(candidate):
+                expanded = candidate
+        return credentials.Certificate(expanded)
 
     return credentials.ApplicationDefault()
 

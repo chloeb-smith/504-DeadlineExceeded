@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRouter, RouterLink } from "vue-router";
 import type { CanvasAssignment } from "../api";
 import useAuth from "../stores/authStore";
@@ -189,57 +189,85 @@ const buildAssignmentContext = (assignment: CanvasAssignment) => {
     ]
   };
 };
+const PROMPT_DESCRIPTION_LIMIT = 320;
+const PROMPT_MILESTONE_LIMIT = 3;
+
+const condenseForPrompt = (value: string, limit = PROMPT_DESCRIPTION_LIMIT) => {
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  if (!cleaned) return "";
+  if (cleaned.length <= limit) return cleaned;
+
+  const sentences = cleaned.split(/(?<=[.!?])\s+/);
+  let aggregate = "";
+  for (const sentence of sentences) {
+    if (!sentence) continue;
+    const candidate = aggregate ? `${aggregate} ${sentence}` : sentence;
+    if (candidate.length > limit) break;
+    aggregate = candidate;
+  }
+  if (!aggregate) {
+    aggregate = cleaned.slice(0, limit).trim();
+  }
+  return `${aggregate}...`;
+};
+
 const requestAssistantHelp = async (assignment: CanvasAssignment) => {
-  if (assistantStore.loading.value) {
-    return;
-  }
+  if (assistantStore.loading.value) return;
+
   const description = plainTextDescription(assignment.description);
-  const keywords = [
-    assignment.course_name ?? "",
-    assignment.course_code ?? "",
-    assignment.name ?? ""
-  ].filter(Boolean);
-  assistantStore.resetConversation();
-  if (keywords.length) {
-    assistantStore.setSelectedKeywords(keywords);
-  } else {
-    assistantStore.clearKeywords();
-  }
+  const keywords = [assignment.course_name ?? "", assignment.course_code ?? "", assignment.name ?? ""].filter(Boolean);
+
   const milestoneLines = Array.isArray(assignment.suggested_milestones)
     ? assignment.suggested_milestones
         .filter((milestone) => milestone && typeof milestone === "object")
+        .slice(0, PROMPT_MILESTONE_LIMIT)
         .map((milestone) => {
           const name = String(milestone.name ?? "").trim();
           if (!name.length) return null;
-          const due = milestone.due_by ? ` (due by ${milestone.due_by})` : "";
-          const notes = milestone.notes ? ` - ${milestone.notes}` : "";
+          const due = milestone.due_by ? ` (due ${milestone.due_by})` : "";
+          const notes = milestone.notes ? ` — ${condenseForPrompt(milestone.notes, 80)}` : "";
           return `- ${name}${due}${notes}`;
         })
         .filter((line): line is string => Boolean(line))
         .join("\n")
     : "";
   const questionSections = [
-    `Please help me plan the assignment "${assignment.name ?? "Unnamed Assignment"}".`,
-    assignment.due_at_display ? `Due date: ${assignment.due_at_display}.` : null,
-    description
-      ? `Full assignment description:\n${description}`
-      : "No additional assignment description was provided.",
-    assignment.priority_label || typeof assignment.priority_score === "number"
-      ? `Priority data: ${assignment.priority_label ?? ""}${
-          typeof assignment.priority_score === "number" ? ` (score ${assignment.priority_score})` : ""
-        }.`
+    `Assignment: ${assignment.name ?? "Unnamed Assignment"}`,
+    assignment.course_name
+      ? `Course: ${assignment.course_name}${assignment.course_code ? ` (${assignment.course_code})` : ""}`
       : null,
-    assignment.priority_rationale ? `Priority rationale: ${assignment.priority_rationale}` : null,
+    assignment.due_at_display ? `Due: ${assignment.due_at_display}` : null,
+    description ? `Key instructions: ${condenseForPrompt(description)}` : "Key instructions: not provided.",
+    assignment.priority_label || typeof assignment.priority_score === "number"
+      ? `Priority: ${assignment.priority_label ?? "Score"}${
+          typeof assignment.priority_score === "number" ? ` (${assignment.priority_score})` : ""
+        }`
+      : null,
+    assignment.priority_rationale ? `Instructor notes: ${condenseForPrompt(assignment.priority_rationale, 220)}` : null,
     milestoneLines ? `Suggested milestones:\n${milestoneLines}` : null,
-    "Provide a comprehensive response with sections for Summary, Step-by-step Plan, Recommended Resources, Risks & Reminders, and Next Actions tailored to this assignment."
+    "Please deliver sections for Summary, Step-by-step Plan with time estimates, Recommended Resources, Risks & Reminders, and Next Actions tailored to this assignment."
   ].filter(Boolean);
   const question = questionSections.join("\n\n");
   const context = buildAssignmentContext(assignment);
+
   await router.push("/assistant");
+  await nextTick();
+
+  assistantStore.resetConversation();
+  if (keywords.length) {
+    assistantStore.setSelectedKeywords(keywords);
+  } else {
+    assistantStore.clearKeywords();
+  }
+
   try {
     await assistantStore.sendMessage(question, context);
   } catch (error) {
     console.error("Failed to request assistant help", error);
+    assistantStore.error.value =
+      error instanceof Error
+        ? error.message
+        : "The assistant could not process that assignment. Please try again.";
   }
 };
 </script>

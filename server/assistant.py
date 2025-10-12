@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -25,8 +26,13 @@ class AssistantResult:
 
 
 _LEGACY_MODEL_ALIASES = {
-    "gemini-1.5-flash": "models/gemini-flash-latest",
-    "gemini-1.5-pro": "models/gemini-pro-latest",
+    "gemini-2.0-flash": "models/gemini-2.0-flash",
+    "gemini-2.0-flash-exp": "models/gemini-2.0-flash-exp",
+    "gemini-flash": "models/gemini-2.0-flash",
+    "gemini-flash-latest": "models/gemini-2.0-flash",
+    "gemini-2.5-pro": "models/gemini-2.5-pro",
+    "gemini-pro": "models/gemini-2.5-pro",
+    "gemini-pro-latest": "models/gemini-2.5-pro",
 }
 
 
@@ -124,10 +130,39 @@ def _extract_candidate_text(response: Any) -> str:
     return "\n".join(parts).strip()
 
 
+def _extract_safety_reasons(response: Any) -> List[str]:
+    reasons: List[str] = []
+
+    prompt_feedback = getattr(response, "prompt_feedback", None)
+    if prompt_feedback is not None:
+        blocked_reason = getattr(prompt_feedback, "block_reason", None)
+        if blocked_reason:
+            reasons.append(str(blocked_reason))
+
+    for candidate in getattr(response, "candidates", []) or []:
+        safety_ratings = getattr(candidate, "safety_ratings", []) or []
+        for rating in safety_ratings:
+            blocked = getattr(rating, "blocked", None)
+            if blocked is None:
+                blocked = getattr(rating, "probability", "") == "HIGH_AND_LIKELY"
+            if blocked:
+                category = getattr(rating, "category", None)
+                reasons.append(str(category or "unspecified"))
+    # Remove duplicates while preserving order
+    seen: set[str] = set()
+    deduped: List[str] = []
+    for reason in reasons:
+        key = reason.lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(reason)
+    return deduped
+
+
 def _resolve_model_name(raw_name: Optional[str]) -> str:
     candidate = (raw_name or "").strip()
     if not candidate:
-        return "models/gemini-flash-latest"
+        return "models/gemini-2.0-flash"
 
     lookup_key = candidate.lower()
     if lookup_key.startswith("models/"):
@@ -221,10 +256,11 @@ def _build_prompt(
     context: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     sections: List[str] = [
-        "You are an academic assistant helping a college student plan and complete assignments.",
-        "Respond with concise, encouraging guidance that breaks big tasks into actionable steps.",
-        "Use the provided keywords, course context, and conversation history. Do not invent course details.",
-        "Reference specific courses and assignments when giving advice, including due dates or key requirements.",
+        "You are an experienced academic success coach helping a college student plan and complete assignments.",
+        "Deliver thorough, encouraging guidance. Break large goals into sequenced action steps with estimated effort or durations when possible.",
+        "Tie every recommendation back to the student's actual courses, assignments, or deadlines. If the information is missing, state the assumption clearly.",
+        "Offer complementary study strategies, resource suggestions, and risk alerts (e.g., overlapping due dates, missing prerequisites).",
+        "Close with a concise recap of the immediate next actions so the student can start right away.",
     ]
 
     unique_keywords = [_clean_keyword(keyword) for keyword in keywords if keyword]
@@ -262,7 +298,7 @@ def _build_prompt(
     sections.append("Student question or message:")
     sections.append(question.strip())
     sections.append(
-        "Provide the best possible guidance. Offer clear next steps, reference relevant assignments, and suggest resources when helpful."
+        "Structure your response with short headings or bullet points when helpful. Include: (1) immediate priorities, (2) detailed work plan with time estimates, (3) study or support resources, and (4) final quick recap."
     )
 
     return "\n\n".join(sections)
@@ -298,7 +334,15 @@ def get_assignment_help(
 ) -> AssistantResult:
     question = (question or "").strip()
     if not question:
-        raise ValueError("question must not be empty")
+        logging.getLogger(__name__).warning(
+            "get_assignment_help received empty question. Supplying fallback prompt. keywords=%s context_keys=%s",
+            list(keywords or []),
+            list((context or {}).keys()) if isinstance(context, dict) else None,
+        )
+        question = (
+            "Provide a thorough, actionable study and execution plan based on the supplied keywords "
+            "and assignment context. Include priorities, milestones, resources, risks, and next actions."
+        )
 
     model = _get_model()
 
@@ -314,13 +358,25 @@ def get_assignment_help(
         resolved_name = _resolve_model_name(os.getenv("GEMINI_MODEL_NAME"))
         message = (
             f"Gemini model '{resolved_name}' is unavailable. "
-            "Update GEMINI_MODEL_NAME to a supported model (for example, models/gemini-flash-latest)."
+            "Update GEMINI_MODEL_NAME to a supported model (for example, models/gemini-2.0-flash)."
         )
         raise GeminiConfigurationError(message) from exc
     except Exception as exc:  # pylint: disable=broad-except
         raise RuntimeError(f"Gemini request failed: {exc}") from exc
 
-    text = (response.text or "").strip()
+    try:
+        text_value = response.text
+    except ValueError:
+        safety_reasons = _extract_safety_reasons(response)
+        if safety_reasons:
+            text_value = (
+                "I couldn't generate a plan because the safety filters flagged this request for "
+                f"{', '.join(safety_reasons)}. Try rephrasing or removing any sensitive details."
+            )
+        else:
+            text_value = ""
+
+    text = (text_value or "").strip()
     if not text:
         text = "I'm sorry, I couldn't generate guidance right now. Please try asking again."
 
@@ -459,7 +515,7 @@ def analyze_assignments(
         resolved_name = _resolve_model_name(os.getenv('GEMINI_MODEL_NAME'))
         message = (
             f"Gemini model '{resolved_name}' is unavailable. "
-            'Update GEMINI_MODEL_NAME to a supported model (for example, models/gemini-flash-latest).'
+            'Update GEMINI_MODEL_NAME to a supported model (for example, models/gemini-2.0-flash).'
         )
         raise GeminiConfigurationError(message) from exc
     except Exception as exc:  # pylint: disable=broad-except
@@ -535,7 +591,3 @@ def analyze_assignments(
         'generated_at': generated_at,
         'assignments': assignments_output,
     }
-
-
-
-
