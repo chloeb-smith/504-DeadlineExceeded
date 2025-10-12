@@ -105,6 +105,7 @@ watch(hasCourseSelection, (value) => {
         <nav class="flex items-center gap-4 text-sm text-muted-foreground">
           <RouterLink to="/dashboard" class="text-foreground font-medium">Dashboard</RouterLink>
           <RouterLink to="/calendar" class="hover:text-foreground">Calendar</RouterLink>
+          <RouterLink to="/assistant" class="hover:text-foreground">Assistant</RouterLink>
         </nav>
         <div class="flex items-center gap-3">
           <span class="text-sm text-muted-foreground hidden sm:inline">

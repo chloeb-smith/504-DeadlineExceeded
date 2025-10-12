@@ -6,6 +6,7 @@ from functools import lru_cache
 from typing import Dict, Iterable, List, Optional, Sequence
 
 import google.generativeai as genai
+from google.api_core.exceptions import NotFound
 
 
 class GeminiConfigurationError(RuntimeError):
@@ -65,6 +66,26 @@ def _build_prompt(keywords: Sequence[str], question: str, history: Sequence[Dict
     return "\n\n".join(sections)
 
 
+_LEGACY_MODEL_ALIASES = {
+    "gemini-1.5-flash": "models/gemini-flash-latest",
+    "gemini-1.5-pro": "models/gemini-pro-latest",
+}
+
+
+def _resolve_model_name(raw_name: Optional[str]) -> str:
+    candidate = (raw_name or "").strip()
+    if not candidate:
+        return "models/gemini-flash-latest"
+
+    lookup_key = candidate.lower()
+    if lookup_key.startswith("models/"):
+        lookup_key = lookup_key[len("models/") :]
+    resolved = _LEGACY_MODEL_ALIASES.get(lookup_key)
+    if resolved:
+        return resolved
+    return candidate
+
+
 @lru_cache(maxsize=1)
 def _get_model() -> genai.GenerativeModel:
     api_key = os.getenv("GEMINI_API_KEY")
@@ -73,7 +94,7 @@ def _get_model() -> genai.GenerativeModel:
             "Gemini API key not configured. Set GEMINI_API_KEY in the environment."
         )
 
-    model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash")
+    model_name = _resolve_model_name(os.getenv("GEMINI_MODEL_NAME"))
     genai.configure(api_key=api_key)
 
     generation_config = {
@@ -105,6 +126,13 @@ def get_assignment_help(
             prompt,
             request_options={"timeout": float(os.getenv("GEMINI_TIMEOUT_SECONDS", "15"))},
         )
+    except NotFound as exc:
+        resolved_name = _resolve_model_name(os.getenv("GEMINI_MODEL_NAME"))
+        message = (
+            f"Gemini model '{resolved_name}' is unavailable. "
+            "Update GEMINI_MODEL_NAME to a supported model (for example, models/gemini-flash-latest)."
+        )
+        raise GeminiConfigurationError(message) from exc
     except Exception as exc:  # pylint: disable=broad-except
         raise RuntimeError(f"Gemini request failed: {exc}") from exc
 
@@ -119,7 +147,11 @@ def get_assignment_help(
         "total_tokens": getattr(usage_meta, "total_token_count", 0),
     }
 
-    model_name = getattr(model, "model_name", os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash"))
+    model_name = getattr(
+        model,
+        "model_name",
+        _resolve_model_name(os.getenv("GEMINI_MODEL_NAME")),
+    )
 
     return AssistantResult(
         text=text,

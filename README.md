@@ -6,8 +6,10 @@
 
 ### Environment setup
 
-1. Copy `server/.env.example` to `server/.env` and populate the Canvas token and Firebase credentials.
-   - Either set `GOOGLE_APPLICATION_CREDENTIALS` to a local path or paste the JSON into `GOOGLE_APPLICATION_CREDENTIALS_JSON`.
-2. Install Python deps with `pip install -r server/requirments.txt`.
+1. Create `server/.env` (see `server/.env` for required keys) and populate:
+   - Canvas credentials (`CANVAS_BASE_URL`, `CANVAS_TOKEN`, etc.).
+   - Firebase Admin credentials via either `GOOGLE_APPLICATION_CREDENTIALS` (file path) or `GOOGLE_APPLICATION_CREDENTIALS_JSON` (inline JSON).
+   - Gemini API configuration: set `GEMINI_API_KEY` (required) and optionally override `GEMINI_MODEL_NAME`.
+2. Install Python deps with `pip install -r server/requirements.txt`.
 3. Start the API with `python server/app.py`.
 

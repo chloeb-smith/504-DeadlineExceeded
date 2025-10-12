@@ -34,7 +34,32 @@ export interface CanvasAssignmentsResponse {
   };
 }
 
+export interface AssistantMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface AssistantRequestPayload {
+  keywords: string[];
+  question: string;
+  history?: AssistantMessage[];
+}
+
+export interface AssistantResponsePayload {
+  reply: string;
+  model: string;
+  keywords: string[];
+  usage: {
+    prompt_tokens: number;
+    candidates_tokens: number;
+    total_tokens: number;
+  };
+  history: AssistantMessage[];
+}
+
 export const getHealth = () => api.get("/api/health").then((r) => r.data);
 export const getHello = () => api.get("/api/hello").then((r) => r.data);
 export const getCanvasAssignments = () =>
   api.get<CanvasAssignmentsResponse>("/api/assignments").then((r) => r.data);
+export const getAssignmentHelp = (payload: AssistantRequestPayload) =>
+  api.post<AssistantResponsePayload>("/api/assistant/help", payload).then((r) => r.data);

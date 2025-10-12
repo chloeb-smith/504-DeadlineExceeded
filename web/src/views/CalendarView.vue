@@ -164,6 +164,9 @@ const handleSignOut = async () => {
             Dashboard
           </RouterLink>
           <RouterLink to="/calendar" class="text-foreground font-medium">Calendar</RouterLink>
+          <RouterLink to="/assistant" class="text-muted-foreground hover:text-foreground">
+            Assistant
+          </RouterLink>
           <template v-if="!isAuthenticated">
             <RouterLink to="/signin" class="text-muted-foreground hover:text-foreground">
               Sign In

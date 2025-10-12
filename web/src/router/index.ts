@@ -29,6 +29,12 @@ const router = createRouter({
       path: "/calendar",
       name: "calendar",
       component: () => import("../views/CalendarView.vue")
+    },
+    {
+      path: "/assistant",
+      name: "assistant",
+      component: () => import("../views/AssistantView.vue"),
+      meta: { requiresAuth: true }
     }
   ]
 });

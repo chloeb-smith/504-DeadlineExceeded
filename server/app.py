@@ -8,6 +8,7 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 from requests import HTTPError
 
+from assistant import GeminiConfigurationError, get_assignment_help
 from canvas import canvas_get
 from store import add_item, list_items
 
@@ -364,6 +365,57 @@ def create_app():
         if warnings:
             payload["warnings"] = warnings
         return jsonify(payload)
+
+    @app.post("/api/assistant/help")
+    def assistant_help():
+        payload = request.get_json(silent=True) or {}
+        raw_keywords = payload.get("keywords") or []
+        question = (payload.get("question") or "").strip()
+        history = payload.get("history") or []
+
+        if not question:
+            return {"error": "A question is required to generate guidance."}, 400
+
+        if not isinstance(raw_keywords, list):
+            return {"error": "keywords must be an array of strings."}, 400
+        keywords = []
+        for keyword in raw_keywords[:25]:
+            if isinstance(keyword, str):
+                cleaned = keyword.strip()
+                if cleaned:
+                    keywords.append(cleaned)
+
+        if history and not isinstance(history, list):
+            return {"error": "history must be an array of messages."}, 400
+
+        safe_history = []
+        for message in (history or [])[-10:]:
+            if not isinstance(message, dict):
+                continue
+            role = (message.get("role") or "").strip().lower()
+            content = (message.get("content") or "").strip()
+            if role not in {"user", "assistant"} or not content:
+                continue
+            safe_history.append({"role": role, "content": content})
+
+        try:
+            result = get_assignment_help(keywords, question, history=safe_history)
+        except ValueError:
+            return {"error": "A question is required to generate guidance."}, 400
+        except GeminiConfigurationError as exc:
+            return {"error": str(exc)}, 500
+        except RuntimeError as exc:
+            return {"error": str(exc)}, 502
+
+        return jsonify(
+            {
+                "reply": result.text,
+                "model": result.model,
+                "keywords": keywords,
+                "usage": result.usage,
+                "history": safe_history,
+            }
+        )
 
     return app
 

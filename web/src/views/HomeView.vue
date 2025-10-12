@@ -34,6 +34,12 @@ const handleSignOut = async () => {
           >
             Calendar
           </RouterLink>
+          <RouterLink
+            to="/assistant"
+            class="text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Assistant
+          </RouterLink>
           <template v-if="showAuthButtons">
             <RouterLink
               to="/signin"
